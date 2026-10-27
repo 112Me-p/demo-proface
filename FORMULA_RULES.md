@@ -1,62 +1,17 @@
-# Formula Specification V4 — เฉพาะม่านลอน / Wave
+# PROFACE V5 Pricing Engine — สูตรสำหรับงานขาย Demo
 
-## Inputs per curtain set
+ผู้ใช้ยืนยันให้ม่านจีบ ม่านลอน ม่านตาไก่ใช้ 3 วิธีคำนวณผ้าเดียวกัน ให้แอดมินเลือกเอง **ทุกชุด** (แยกจากกฎตรวจขนาดที่ผลิตได้)
 
-- `W`: width of measured curtain (m)
-- `H`: height of measured curtain (m)
-- `FW`: fabric full width (m)
-- `TR`: track charge per meter
-- `FR`: fabric price from the workbook column `ราคาตั้ง -50%` (already net, do not apply another 50%)
-- `method`: wide | narrow | reverse, explicitly selected by Admin
+1. ผ้าหน้ากว้าง (`wide`): หน้าผ้าใช้ได้ = หน้าผ้าจริง − 0.30 ม. ถ้าม่านกว้างเกินหน้านี้ ระบบไม่อนุญาตให้คำนวณวิธีนี้ ความสูงไม่ติดเงื่อนไขหน้าผ้า ในตัวอย่าง Excel: `quantity = max(width,1) × 3.6 × 1.2` 
+2. ผ้าหน้าแคบ (`narrow`): ต่อผ้าตามความกว้าง หากกว้างมากกว่าหน้าผ้าให้เตือนเรื่องรอยต่อ ความสูงไม่ใช่ข้อจำกัดการเลือกวิธี แต่ยังมีผลต่อการคิดราคาปริมาณผ้า ในตัวอย่าง Excel: `panels = ceil(((max(width,1)×2.4)+1)/fabricWidth)`; `quantity=(height+1.8)×panels×1.2`
+3. ผ้าหน้ากว้างเย็บกลับ (`reverse`): หน้าผ้าใช้ได้ = หน้าผ้าจริง − 0.30 ม. ถ้าม่านสูงเกินหน้านี้ ระบบไม่อนุญาตให้คำนวณ ความกว้างไม่ติดเงื่อนไขหน้าผ้า การคิดราคาในตัวอย่างที่ผู้ใช้ให้ 4 โจทย์ตรงกับราคาแบบหน้าแคบ จึงใช้นิพจน์จำนวนชิ้น/ปริมาณเดียวกันชั่วคราว แต่ยังไม่ถือว่าครอบคลุมทุกกรณี
 
-## Direction / feasibility validation (confirmed by user)
+ราคาผ้าคิด = quantity × ราคาตั้ง -50% (ราคาที่กรอกคือราคาหลังลดแล้ว ไม่ลดซ้ำ)
+ราคาราง = width × trackRate
+ราคาก่อนปัด = ราคาผ้าคิด + ราคาราง
+ราคาขายต่อชุด = ปัดหลักร้อยแบบครึ่งขึ้น
+รวมงาน = ผลรวมราคาขายต่อชุด + ค่าใช้จ่ายเพิ่มเติม
 
-| Method | Direction limit | Action |
-|---|---|---|
-| wide | `W <= FW - 0.30` | Reject selected method when false |
-| narrow | W may exceed FW | Warn that fabrics need joining; height does not restrict direction choice |
-| reverse | `H <= FW - 0.30` | Reject selected method when false |
+**กรณีเทียบใน Excel ที่ผ่าน:** กว้าง 2.00, สูง 2.60, หน้าผ้า 3.00, ราคาราง 800, ราคาผ้า 295, สูตรหน้ากว้าง → ราคาขาย 4,100 บาท เมื่อใช้ชนิดม่านใดใน 3 ประเภทข้างต้นตามคำยืนยันผู้ใช้
 
-This is a **fabric orientation** constraint distinct from the pricing formula. The 0.30 m allowance was explicitly provided by PROFACE for wide and reverse methods. Narrow does not use this allowance as a maximum panel-width eligibility rule here because its full production cutting rules are pending.
-
-## Excel Wave pricing algorithm (demo)
-
-`E = MAX(W, 1)`
-
-**wide:**
-```
-QuantityForPricing = E * 3.6 * 1.2
-```
-
-**narrow:**
-```
-PricingPanels = CEILING((E * 2.4 + 1) / FW)
-QuantityForPricing = (H + 1.8) * PricingPanels * 1.2
-```
-
-**reverse:**
-```
-PricingPanels = CEILING((E * 2.4 + 1) / FW)
-QuantityForPricing = (H + 1.8) * PricingPanels * 1.2
-```
-*Reverse currently produces the same pricing results in supplied Excel examples, not independently verified for every kind of curtain or fabric. Its dimension validation is **different** from narrow and enforced separately.*
-
-All modes:
-```
-RawPrice = QuantityForPricing * FR + W * TR
-RoundedSalePrice = FLOOR(RawPrice / 100 + 0.5) * 100
-ProjectSubtotal = SUM(RoundedSalePrice per confirmed-price item) + manual charges
-VAT = ProjectSubtotal * 0.07
-```
-
-The pricing quantity is **not an order/purchasing quantity**. If narrow width > full fabric width, the UI shows rough flat coverage = `CEILING(W / FW)` only to explain seams; this is not the `PricingPanels` figure and is not a cutting calculation.
-
-## Unknown / not yet approved
-
-1. Pleated curtain pricing formula
-2. Eyelet curtain pricing formula
-3. Any product-specific exceptions, minimums, quantity discounts, or alternate fabric widths not yet supplied
-4. Purchasing and sewing/cutting instructions
-5. Role-bound secured production connectivity to Google Sheets
-
-Excel examples should be tested for boundary cases and independently reconciled against current production policies before live quotation.
+**หมายเหตุ**: จำนวนชิ้นในสูตรราคาคือจำนวนสำหรับคิดราคา ไม่ยืนยันเป็นจำนวนชิ้นตัดเย็บหรือจำนวนที่ฝ่ายจัดซื้อต้องสั่ง ยังไม่ทำสูตรฝ่ายจัดซื้อหรือใบสั่งเย็บ
