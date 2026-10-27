@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="theme-color" content="#f8f7fa" />
 <meta name="description" content="PROFACE Workflow Demo — ระบบวัดหน้างาน คำนวณราคา ตรวจสอบ และใบสั่งงาน" />
-<title>PROFACE / Workflow Studio — Fabric & Sales Workflow Demo V6</title>
+<title>PROFACE / Workflow Studio — Workflow Studio V7 · Project Workspaces</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -13,19 +13,21 @@
 <link rel="stylesheet" href="quote.css" />
 </head>
 <body>
+<div id="profileGate" class="profile-gate" aria-label="เลือกโปรไฟล์พนักงาน"></div>
 <div class="app-shell">
   <aside class="sidebar">
     <div class="brand" role="banner"><span class="brandmark">P<span>.</span></span><span class="brandcopy"><strong>PROFACE</strong><small>WORKFLOW STUDIO</small></span></div>
     <div class="side-section-heading">WORKSPACE <span>01</span></div>
     <nav id="sideNav" class="nav" aria-label="หลัก"></nav>
     <div class="side-spacer"></div>
-    <div class="side-hint"><span class="side-hint-icon">◈</span><div><strong>Preview environment</strong><p>ทดสอบในเครื่องนี้เท่านั้น ยังไม่เชื่อม Google Sheets</p></div></div>
+    <div class="side-hint"><span class="side-hint-icon">◈</span><div><strong>V7 UI Preview</strong><p>แสดงตัวอย่างการจัดเก็บบน Google Drive/Sheets · ยังไม่เชื่อมจริง</p></div></div>
     <div class="side-footer"><span class="avatar">PF</span><span><strong>PROFACE Team</strong><small>Internal · Demo mode</small></span><span class="online"></span></div>
   </aside>
   <main class="workspace">
-    <header class="topbar"><div class="breadcrumb">Workspace <span>/</span> <strong id="crumb">ภาพรวม</strong></div><div class="top-actions"><span class="live-dot"></span><span class="preview-label">INTERACTIVE PROTOTYPE</span><button class="btn btn-light btn-top" id="exportBtn" title="ดาวน์โหลดข้อมูล JSON">⇩ <span>Export data</span></button></div></header>
+    <header class="topbar"><div class="breadcrumb">Workspace <span>/</span> <strong id="crumb">ภาพรวม</strong></div><div class="top-actions"><span class="live-dot"></span><span class="preview-label">V7 WORKSPACE PREVIEW</span><button class="btn btn-light btn-top" id="exportBtn" title="ดาวน์โหลดข้อมูล JSON">⇩ <span>Export data</span></button></div></header>
+    <div id="workspaceRibbon"></div>
     <div class="content" id="content" aria-live="polite"></div>
-    <footer class="footer">© PROFACE · ทดลองเริ่มใช้งานจากศูนย์ <span>Demo V6 · สูตรจาก Excel · แนวผ้า 3 วิธี · Dashboard เซลล์ · ยังไม่เชื่อม Sheets จริง</span></footer>
+    <footer class="footer">© PROFACE · ทดลองเริ่มใช้งานจากศูนย์ <span>V7 UX Preview · โปรไฟล์พนักงาน / Project Workspace · ยังไม่เชื่อม Google Drive/Sheets จริง</span></footer>
   </main>
 </div>
 <nav class="mobile-nav" id="mobileNav" aria-label="การนำทางบนมือถือ"></nav>

@@ -1,5 +1,5 @@
-/* PROFACE WORKFLOW STUDIO — LOCAL-ONLY INTERACTIVE DEMO
- * V6 five curtain types + fabric joining + duplicate measurements + client quotation
+/* PROFACE WORKFLOW STUDIO — V7 UX PROTOTYPE (LOCAL ONLY)
+ * V7 profile picker + scoped workspace + storage-plan preview. V6 pricing retained.
  * "ทำราคา กิ๊ก .xlsx", sheet "ออนไลน์", four test cases rows 7-26.
  * No data ever leaves the browser: no server, Sheets, authentication or APIs.
  */
@@ -12,9 +12,26 @@ const money=(n,d=0)=>(Number(n)||0).toLocaleString('th-TH',{minimumFractionDigit
 const n=v=>{const x=Number(v);return Number.isFinite(x)?x:0};
 const uid=()=>`CW-${Date.now().toString(36).slice(-5).toUpperCase()}-${Math.floor(Math.random()*900+100)}`;
 // V2 deliberately starts empty. Previous demo sample projects are never loaded.
-const storageKey='proface-workflow-demo-v6';
+const storageKey='proface-workflow-demo-v7';
 const salesOwners=["S'Beam","S'Tong","S'Gun","S'Bank",'Showroom'];
+const profiles=[
+ {key:'beam',name:"S'Beam",owner:"S'Beam",email:'natthinan.proface@gmail.com',role:'sales',color:'#7963CA',initial:'B'},
+ {key:'tong',name:"S'Tong",owner:"S'Tong",email:'chuedchai.proface@gmail.com',role:'sales',color:'#5079AA',initial:'T'},
+ {key:'gun',name:"S'Gun",owner:"S'Gun",email:'proface.corporation@gmail.com',role:'admin',color:'#5B907E',initial:'G'},
+ {key:'bank',name:"S'Bank",owner:"S'Bank",email:'kitchai.proface@gmail.com',role:'sales',color:'#B28C64',initial:'K'},
+ {key:'wachida',name:'Showroom',owner:'Showroom',email:'wachida.proface@gmail.com',role:'admin',color:'#B47CAB',initial:'S'},
+ {key:'chanapat',name:'Showroom',owner:'Showroom',email:'chanapat.proface@gmail.com',role:'admin',color:'#AB718F',initial:'S'},
+ {key:'creator',name:'System Admin',owner:null,email:'phonphotnuramrum@gmail.com',role:'admin',color:'#33394E',initial:'A'}
+];
+let profile=null;
+const profileKey='proface-v7-demo-selected-profile';
+let recentProjects={};
+try{recentProjects=JSON.parse(localStorage.getItem('proface-v7-recent')||'{}')}catch(e){}
 let salesFilter=salesOwners[0];
+const isAdmin=()=>profile&&profile.role==='admin';
+const accessible=rec=>!!(profile && (isAdmin()||rec.project?.sales===profile.owner));
+const scopedProjects=()=>allProjects().filter(accessible);
+
 const defaultState=()=>({project:null,items:[],extras:[],status:'draft',events:[],archive:[],quote:{}});
 let state;
 try {
@@ -29,7 +46,7 @@ try {
   localStorage.removeItem('proface-workflow-demo-v1');
 }catch(e){state=defaultState()}
 let route='home';let mode='single';let toastTimer=null;let uploadingItemId=null;
-function save(){try{localStorage.setItem(storageKey,JSON.stringify(state));return true}catch(e){toast('พื้นที่จัดเก็บของเบราว์เซอร์เต็ม กรุณาลดจำนวนรูปหรือ Export ข้อมูล');return false}}
+function save(){try{localStorage.setItem(storageKey,JSON.stringify(state));if(profile&&state.project){recentProjects[profile.key]=state.project.id;localStorage.setItem('proface-v7-recent',JSON.stringify(recentProjects))}return true}catch(e){toast('พื้นที่จัดเก็บของเบราว์เซอร์เต็ม กรุณาลดจำนวนรูปหรือ Export ข้อมูล');return false}}
 function toast(s){const t=$('#toast');t.textContent=s;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),3200)}
 function ico(name){const i={home:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',measure:'<path d="M3 18V6a2 2 0 0 1 2-2h13"/><path d="M7 7h10v10H7z"/><path d="M7 10h3m-3 3h2m5-6v3"/>',pricing:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 12h3m-3 4h3m5-4v4"/>',review:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M8.5 12l2 2 4.5-5"/>',order:'<path d="M7 3h9l4 4v14H7z"/><path d="M16 3v4h4M10 12h7m-7 4h7"/>',camera:'<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3"/>',check:'<path d="M4 12l5 5L20 6"/>',chevron:'<path d="M9 18l6-6-6-6"/>',plus:'<path d="M12 5v14m-7-7h14"/>',list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h1m-1 6h1m-1 6h1"/>',trend:'<path d="M3 17l6-6 4 4 8-9m-6 0h6v6"/>',shield:'<path d="M12 2l9 4v6c0 5-3.5 8-9 10-5.5-2-9-5-9-10V6z"/><path d="M8 12l3 3 5-5"/>',info:'<circle cx="12" cy="12" r="10"/><path d="M12 11v6m0-10h.01"/>'}[name]||'<circle cx="12" cy="12" r="9"/>';
 return `<span class="svg-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${i}</svg></span>`}
@@ -78,8 +95,9 @@ function calc(it){
 }
 function activeSnapshot(){return state.project?{project:state.project,items:state.items,extras:state.extras,status:state.status,events:state.events,quote:state.quote}:null}
 function allProjects(){return [...state.archive,...(activeSnapshot()?[activeSnapshot()]:[])];}
-function ownerProjects(owner){return allProjects().filter(v=>v.project?.sales===owner);}
+function ownerProjects(owner){return scopedProjects().filter(v=>v.project?.sales===owner);}
 function switchProject(id){
+ const target=state.archive.find(x=>x.project?.id===id);if(!target||!accessible(target)){toast('คุณไม่มีสิทธิ์เข้าถึงโปรเจกต์นี้');return;}
  const idx=state.archive.findIndex(x=>x.project?.id===id);if(idx<0)return;
  const chosen=state.archive.splice(idx,1)[0];const current=activeSnapshot();if(current)state.archive.push(current);
  Object.assign(state,{project:chosen.project,items:chosen.items,extras:chosen.extras,status:chosen.status,events:chosen.events,quote:chosen.quote||{}});
@@ -88,8 +106,8 @@ function switchProject(id){
 function exportCSV(){
  const q=x=>'"'+String(x??'').replace(/"/g,'""')+'"';
  const rows=[['project_id','sales_owner','project_name','contact','location','status','item_id','floor','room','spot','curtain_type','width_m','height_m','fabric_code','fabric_method','fabric_width_m','usable_fabric_m','track_rate','fabric_rate','area_unit','seam_join','price_raw','price_rounded','photo_count','notes']];
- for(const rec of allProjects()){if(!rec.items.length)rows.push([rec.project.id,rec.project.sales,rec.project.name,rec.project.contact,rec.project.location,rec.status,...Array(19).fill('')]);for(const it of rec.items){const c=calc(it);rows.push([rec.project.id,rec.project.sales,rec.project.name,rec.project.contact,rec.project.location,rec.status,it.id,it.floor,it.room,it.spot,it.type,it.width,it.height,it.fabric,it.fabricMethod,it.fabricWidth,c.usable??'',it.trackRate,it.fabricRate,it.areaUnit||'',it.joinWide?'YES':'NO',c.valid?c.raw:'',c.valid?c.rounded:'',it.photos?.length||0,it.notes]);}}
- downloadFile('PROFACE_GoogleSheets_Import_V6.csv','\ufeff'+rows.map(row=>row.map(q).join(',')).join('\r\n'),'text/csv;charset=utf-8');toast('ส่งออก CSV สำหรับนำเข้า Google Sheets แล้ว');
+ for(const rec of scopedProjects()){if(!rec.items.length)rows.push([rec.project.id,rec.project.sales,rec.project.name,rec.project.contact,rec.project.location,rec.status,...Array(19).fill('')]);for(const it of rec.items){const c=calc(it);rows.push([rec.project.id,rec.project.sales,rec.project.name,rec.project.contact,rec.project.location,rec.status,it.id,it.floor,it.room,it.spot,it.type,it.width,it.height,it.fabric,it.fabricMethod,it.fabricWidth,c.usable??'',it.trackRate,it.fabricRate,it.areaUnit||'',it.joinWide?'YES':'NO',c.valid?c.raw:'',c.valid?c.rounded:'',it.photos?.length||0,it.notes]);}}
+ downloadFile('PROFACE_GoogleSheets_Import_V7_DEMO.csv','\ufeff'+rows.map(row=>row.map(q).join(',')).join('\r\n'),'text/csv;charset=utf-8');toast('ส่งออก CSV สำหรับนำเข้า Google Sheets แล้ว');
 }
 function totals(){const res=state.items.map(item=>({item,...calc(item)}));const valid=res.filter(v=>v.valid);const unpriced=res.filter(v=>!v.valid);const subtotal=valid.reduce((a,v)=>a+v.rounded,0)+state.extras.reduce((a,x)=>a+n(x.amount),0);const vat=+(subtotal*.07).toFixed(2);return{res,valid,unpriced,subtotal,vat,grand:subtotal+vat}}
 function statCard(label,value,meta,icon){return `<div class="stat-card"><div class="stat-label">${label}${ico(icon)}</div><div class="stat-value">${value}</div><div class="stat-mini">${meta}</div></div>`}
@@ -99,25 +117,25 @@ function projectCreate(){return `<section class="panel onboarding" id="projectSe
  <div class="panel-head"><div><div class="kicker">GET STARTED / 01</div><h3>สร้างโปรเจกต์ใหม่</h3><p class="panel-desc">เลือกเซลล์เจ้าของงานให้ถูกต้อง แล้วเริ่มบันทึกขนาดและรูปหน้างาน</p></div><span class="tag">ยังไม่มีข้อมูล</span></div>
  <form id="projectForm" autocomplete="off">
   <div class="field-grid"><div class="field"><label>ชื่องาน / ชื่อลูกค้า *</label><input name="name" required placeholder="เช่น คุณ... / บ้านเลขที่..." /></div><div class="field"><label>เบอร์โทรผู้ติดต่อ</label><input type="tel" name="contact" placeholder="เบอร์ติดต่อลูกค้า" /></div>
-  <div class="field"><label>ที่อยู่ / สถานที่ติดตั้ง</label><input name="location" placeholder="สถานที่ติดตั้ง" /></div><div class="field"><label>เซลล์เจ้าของงาน * (บังคับเลือก)</label><select name="sales" required><option value="">— เลือกเจ้าของงาน —</option>${salesOwners.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select></div></div>
+  <div class="field"><label>ที่อยู่ / สถานที่ติดตั้ง</label><input name="location" placeholder="สถานที่ติดตั้ง" /></div><div class="field"><label>เซลล์เจ้าของงาน * (กำหนดจากโปรไฟล์)</label><select name="sales" required ${!isAdmin()?'disabled':''}><option value="">— เลือกเจ้าของงาน —</option>${salesOwners.map(x=>`<option value="${esc(x)}" ${profile?.owner===x?'selected':''}>${esc(x)}</option>`).join('')}</select>${!isAdmin()?`<input type="hidden" name="sales" value="${esc(profile.owner)}">`:``}</div></div>
   <div class="field" style="margin-top:14px"><label>หมายเหตุโปรเจกต์</label><textarea name="note" placeholder="ข้อมูลเพิ่มเติม (ถ้ามี)"></textarea></div>
   <div class="form-actions"><button type="submit" class="btn btn-primary">${ico('plus')} สร้างงานและเริ่มวัดหน้างาน →</button></div>
  </form></section>`}
 function sales(){
- const rows=ownerProjects(salesFilter), all=allProjects();
+ const chosenOwner=isAdmin()?salesFilter:profile.owner;const rows=isAdmin()&&chosenOwner==='all'?scopedProjects():isAdmin()?ownerProjects(chosenOwner):scopedProjects();const all=scopedProjects();
  const allItems=rows.flatMap(x=>x.items);
  const priced=allItems.filter(it=>calc(it).valid).length;
  const completed=rows.filter(x=>x.status==='confirmed').length;
- return `${heading('SALES / PERSONAL DASHBOARD','งานของเซลล์','ทดลองดูข้อมูลย้อนหลังแยกเจ้าของงาน (Demo ข้อมูลในเบราว์เซอร์เท่านั้น)',`<button class="btn btn-light" data-action="export-csv">⇩ Export Google Sheets CSV</button>`)}
- <div class="panel" style="margin-bottom:20px"><div class="field" style="max-width:430px"><label>เลือกเซลล์เจ้าของงาน</label><select id="salesFilter">${salesOwners.map(x=>`<option value="${esc(x)}" ${salesFilter===x?'selected':''}>${esc(x)}</option>`).join('')}</select></div><div class="hint" style="margin-top:10px">ทดลองสลับดูงานตามเซลล์ได้ใน Demo เท่านั้น · รุ่นจริงต้อง Login และ Backend ตรวจสิทธิ์ก่อนดึงข้อมูลจาก Google Sheets</div></div>
- <div class="stats-grid">${statCard('งานทั้งหมด',rows.length,'เฉพาะ '+salesFilter,'list')}${statCard('จำนวนชุดม่าน',allItems.length,'รวมทุกโปรเจกต์','measure')}${statCard('คำนวณสำเร็จ',priced,'รายการจากสูตรที่ยืนยัน','pricing')}${statCard('ยืนยันแล้ว',completed,'โปรเจกต์พร้อมส่งงาน','check')}</div>
- <section class="panel"><div class="panel-head"><div><h3>ประวัติงาน · ${esc(salesFilter)}</h3><p class="panel-desc">${rows.length} โปรเจกต์จาก ${all.length} โปรเจกต์ที่บันทึกใน Demo เครื่องนี้</p></div><span class="tag">LOCAL DEMO</span></div>
+ return `${heading('SALES / PERSONAL DASHBOARD','งานของเซลล์','เลือกดูประวัติของบัญชีนี้ — ข้อมูลทดลองยังอยู่ในเบราว์เซอร์เท่านั้น',`<button class="btn btn-light" data-action="export-csv">⇩ Export Google Sheets CSV</button>`)}
+ <div class="panel" style="margin-bottom:20px"><div class="field" style="max-width:430px"><label>เลือกเซลล์เจ้าของงาน</label><select id="salesFilter" ${!isAdmin()?"disabled":""}>${isAdmin()?`<option value="all" ${chosenOwner==='all'?'selected':''}>ทุกเซลล์ / ทุกโปรเจกต์</option>`:''}${salesOwners.map(x=>`<option value="${esc(x)}" ${chosenOwner===x?'selected':''}>${esc(x)}</option>`).join('')}</select></div><div class="hint" style="margin-top:10px">ทดลองสลับดูงานตามสิทธิ์ของโปรไฟล์ · รุ่นจริงต้อง Login และ Backend ตรวจสิทธิ์ก่อนดึงข้อมูลจาก Google Sheets</div></div>
+ <div class="stats-grid">${statCard('งานทั้งหมด',rows.length,'เฉพาะ '+(chosenOwner==='all'?'ทุกคน':chosenOwner),'list')}${statCard('จำนวนชุดม่าน',allItems.length,'รวมทุกโปรเจกต์','measure')}${statCard('คำนวณสำเร็จ',priced,'รายการจากสูตรที่ยืนยัน','pricing')}${statCard('ยืนยันแล้ว',completed,'โปรเจกต์พร้อมส่งงาน','check')}</div>
+ <section class="panel"><div class="panel-head"><div><h3>ประวัติงาน · ${esc(chosenOwner)}</h3><p class="panel-desc">${rows.length} โปรเจกต์จาก ${all.length} โปรเจกต์ที่บันทึกใน Demo เครื่องนี้</p></div><span class="tag">LOCAL DEMO · ไม่ใช่ Sheets จริง</span></div>
  ${rows.length?rows.slice().reverse().map(rec=>`<article class="history-card"><div><div class="list-meta">${esc(rec.project.id)} · ${esc(rec.project.sales)}</div><h4>${esc(rec.project.name)}</h4><p>${rec.items.length} ชุด · ${esc(rec.project.location||'ไม่ระบุสถานที่')} · ${rec.status==='confirmed'?'ยืนยันแล้ว':'กำลังดำเนินการ'}</p></div><button class="btn btn-soft" data-open-project="${esc(rec.project.id)}">เปิดงาน →</button></article>`).join(''):'<div class="empty"><strong>ยังไม่มีงานของเซลล์คนนี้</strong><p>เริ่มจากสร้างงานใหม่และเลือกเจ้าของงานให้ตรงชื่อ</p></div>'}
  <div class="form-actions"><button class="btn btn-primary" data-action="new-project">+ สร้างงานใหม่</button><button class="btn btn-light" data-action="export-csv">ส่งออก CSV เข้า Sheets</button></div></section>
  <div class="notice">Google Sheets Sync: ยังไม่เชื่อมต่อจริง · V6 ใช้ Local Demo และดาวน์โหลด CSV สำหรับนำเข้า Google Sheets (ไม่มีการส่งข้อมูลออกไปเอง)</div>`;
 }
 function home(){const t=totals(),countPhoto=state.items.reduce((a,x)=>a+(x.photos?.length||0),0),exists=!!state.project;const tiles=[['01','วัดหน้างาน','กรอกขนาด · ถ่ายรูปทีละชุด','measure','measure'],['02','คำนวณราคา','ใส่หน้าผ้า · ราคาราง · ราคาผ้า','pricing','pricing'],['03','ตรวจสอบงาน','ให้ฝ่ายขายยืนยันราคาและขนาด','review','review'],['04','ใบสั่งงาน / ใบเสนอราคา','สร้างเอกสารสองชนิดจากข้อมูลเดิม','order','order']];
-return `${heading('PROFACE INTERNAL SYSTEM',exists?'ภาพรวมโปรเจกต์':'เริ่มงานแรกของคุณ','จากวัดหน้างาน สู่คำนวณราคาและใบสั่งงาน โดยไม่ต้องกรอกข้อมูลซ้ำ')}
+return `${heading('PROFACE INTERNAL SYSTEM',exists?'Workspace · '+state.project.id:'แดชบอร์ด · '+(profile?.name||'PROFACE'),'จากวัดหน้างาน สู่คำนวณราคาและใบสั่งงาน โดยไม่ต้องกรอกข้อมูลซ้ำ')}
 <section class="hero"><div class="hero-copy"><div class="hero-label">MEASURE. CALCULATE. CONFIRM.</div><h2>${exists?'พร้อมบันทึกขนาด<br>และส่งต่อทำราคา':'เริ่มจากงานใหม่<br>ไม่มีข้อมูลเดิม'}</h2><p>${exists?'บันทึกทีละชุด พร้อมภาพถ่าย แล้วให้แอดมินรับช่วงต่อ':'สร้างโปรเจกต์แรก จากนั้นกรอกขนาดและแนบรูปด้วยมือถือได้ทันที'}</p><button class="btn hero-btn" ${exists?'data-nav="measure"':'data-action="start-project"'}>${ico('plus')} ${exists?'เพิ่มจุดวัด':'สร้างโปรเจกต์แรก'}</button></div><div class="hero-line"></div><svg class="hero-canvas" viewBox="0 0 360 285" fill="none" aria-hidden="true"><path d="M68 16H342V262H68z" stroke="#b29cc6" stroke-width="3"/><path d="M75 20H335V247H75z" fill="#cfbbe0" opacity=".11"/><path d="M88 35h233" stroke="#d7c8e1" stroke-width="3"/><path d="M103 38v195m21-195v195m22-195v195m23-195v195m22-195v195m24-195v195m24-195v195m22-195v195m22-195v195" stroke="#f0e9f8" stroke-width="15" opacity=".42"/><path d="M103 38v195m43-195v195m45-195v195m44-195v195m46-195v195" stroke="#b9a0ce" stroke-width="2" opacity=".7"/><path d="M95 238c44 12 66-9 110 0 42 10 72-8 113 0" stroke="#d2bedb" stroke-width="2"/><path d="M67 264H345" stroke="#ede0f4" stroke-width="2"/></svg></section>
 <div class="stats-grid">${statCard('รายการม่าน',money(state.items.length),'รายการที่วัดและบันทึก','measure')}${statCard('คำนวณแล้ว',money(t.valid.length),'เฉพาะสูตรที่ตรวจสอบแล้ว','pricing')}${statCard('ภาพหน้างาน',money(countPhoto),'ภาพที่แนบกับรายการ','camera')}${statCard('ยอดราคาคำนวณ',`฿${money(t.subtotal)}`,'ยังไม่รวม VAT 7%','trend')}</div>
 ${exists?`<section class="panel" id="projectSetup"><div class="panel-head"><div><div class="kicker">ACTIVE PROJECT</div><h3>${esc(state.project.name)}</h3><p class="panel-desc">${esc(state.project.id)} · เจ้าของงาน: ${esc(state.project.sales)} · ${state.items.length} ชุดม่าน · ${esc(state.project.location||'ยังไม่ระบุสถานที่')}</p></div><span class="tag tag-green">งานที่กำลังทำ</span></div><div class="form-actions"><button class="btn btn-primary" data-nav="measure">${ico('plus')} เพิ่มจุดวัด</button><button class="btn btn-light" data-nav="pricing">ไปหน้าทำราคา</button><button class="btn btn-light" data-action="new-project">+ งานใหม่</button><button class="btn btn-light" data-nav="sales">Dashboard เซลล์</button><button class="btn btn-light danger-btn" data-action="reset">ล้างข้อมูลทดลองทั้งหมด</button></div></section>`:projectCreate()}
@@ -155,9 +173,9 @@ function pricing(){const t=totals();return `${heading('STEP 02 / PRICING ENGINE'
 <div class="two-col pricing-layout"><div><div class="sample-strip" style="margin-bottom:14px">${ico('info')} Demo เริ่มว่าง ไม่กำหนดราคาสินค้าอัตโนมัติ: ทุกชุดต้องให้แอดมินกรอกราคาจริงก่อนคำนวณ</div>${state.items.length?state.items.map(priceCard).join(''):'<div class="empty">ยังไม่มีรายการสำหรับคำนวณ</div>'}
 <div class="panel"><div class="panel-head"><div><h3>ค่าใช้จ่ายเพิ่มเติม</h3><p class="panel-desc">เช่น ค่าติดตั้ง กล่องบังราง หรือรื้อถอน — ตัว Demo กรอกเป็นยอดเงินเอง</p></div><button class="btn btn-soft" data-action="add-extra">+ เพิ่มรายการ</button></div>${state.extras.map((x,i)=>`<div class="review-row"><div class="review-row-head"><div><h4>${esc(x.label)}</h4><p>เพิ่มโดยแอดมิน ไม่ได้คำนวณจากสูตรสินค้า</p></div><div class="text-right"><b>฿${money(x.amount)}</b><div><button class="btn-reset" data-del-extra="${i}">ลบ</button></div></div></div></div>`).join('')||'<div class="hint">ยังไม่มีค่าบริการเพิ่มเติม</div>'}</div></div>
 <aside class="panel summary-card"><h3>PRICING SUMMARY</h3><p class="section-sub">อัปเดตทันทีเมื่อแก้และออกจากช่องข้อมูล</p><div class="summary-line"><span>จำนวนรายการทั้งหมด</span><b>${state.items.length} ชุด</b></div><div class="summary-line"><span>คำนวณสำเร็จ</span><b>${t.valid.length} ชุด</b></div><div class="summary-line"><span>ราคาก่อน VAT</span><b>฿${money(t.subtotal)}</b></div><div class="summary-line"><span>VAT 7%</span><b>฿${money(t.vat,2)}</b></div><div style="padding-top:22px"><div class="section-sub">ราคาทั้งสิ้น</div><div class="summary-total">฿${money(t.grand,2)}</div></div><button class="btn btn-primary" data-nav="review" ${!state.items.length?'disabled':''}>ส่งฝ่ายขายตรวจสอบ →</button><p class="summary-caption">${t.unpriced.length?`⚠ มี ${t.unpriced.length} ชุดยังคำนวณไม่ได้ จะไม่สามารถยืนยันงานจนกว่าจะครบ`: '✓ รายการที่กรอกครบคำนวณได้แล้ว'}<br>ม่านจีบ / ลอน / ตาไก่: วิธีผ้า 3 แบบ (+ต่อผ้า) · ม่านม้วน / มู่ลี่ไม้: พื้นที่ · ไม่ใช้ราคาตั้งต้น</p></aside></div>`}
-function review(){const t=totals(),missingPhotos=state.items.filter(it=>!(it.photos||[]).length).length,blocked=t.unpriced.length>0||missingPhotos>0||!state.items.length;return `${heading('STEP 03 / SALES CONFIRMATION','ตรวจทานก่อนออกใบสั่งงาน','เซลล์เช็กขนาด สินค้า และราคาที่แอดมินคำนวณ ก่อนยืนยันเพื่อส่งต่อจัดซื้อ')}${stepper('review')}
+function review(){const t=totals(),missingPhotos=state.items.filter(it=>!(it.photos||[]).length).length,blocked=t.unpriced.length>0||!state.items.length;return `${heading('STEP 03 / SALES CONFIRMATION','ตรวจทานก่อนออกใบสั่งงาน','เซลล์เช็กขนาด สินค้า และราคาที่แอดมินคำนวณ ก่อนยืนยันเพื่อส่งต่อจัดซื้อ')}${stepper('review')}
 <div class="two-col"><div><div class="panel"><div class="panel-head"><div><h3>รายการสำหรับตรวจสอบ</h3><p class="panel-desc">${esc(state.project.name)} · ${esc(state.project.id)}</p></div><span class="tag ${state.status==='confirmed'?'tag-green':'tag-warn'}">${state.status==='confirmed'?'อนุมัติแล้ว':'รอยืนยัน'}</span></div>${!state.items.length?'<div class="empty"><strong>ยังไม่มีรายการให้ตรวจสอบ</strong><p>เริ่มจากวัดหน้างานก่อน</p></div>':''}${t.res.map(({item,...c})=>`<div class="review-row"><div class="review-row-head"><div><h4>${esc(item.room)} · ${esc(item.spot)}</h4><div class="curtain-tag">${esc(curtainLabel(item.type))}</div><p>กว้าง ${money(item.width,2)} × สูง ${money(item.height,3)} ม. · ${esc(item.fabric)}<br>${areaCurtains.has(item.type)?`หน่วย: ${esc(areaUnitNames[item.areaUnit]||"ยังไม่เลือก")} · ราคา/หน่วย ฿${money(item.fabricRate)}`:`สูตรผ้า ${esc(fabricMethods[item.fabricMethod]||"ยังไม่เลือก")}${item.joinWide?" · ยืนยันต่อผ้า":""} · หน้าผ้า ${money(item.fabricWidth,2)} · ราคาราง ${money(item.trackRate)} · ผ้า ${money(item.fabricRate)}`}<br>${item.photos?.length?'ภาพแนบ '+item.photos.length+' รูป':'⚠ ยังไม่แนบภาพหน้างาน'}</p></div><div class="text-right"><div class="number">${c.valid?'฿'+money(c.rounded):'—'}</div><div class="small-muted">${c.valid?'คำนวณแล้ว':'ข้อมูลไม่ครบ/สูตรไม่รองรับ'}</div></div></div></div>`).join('')}</div></div>
-<div><div class="panel"><h3>สรุปอนุมัติงาน</h3><div class="summary-line" style="color:#7a7480"><span>ราคาก่อน VAT</span><b>฿${money(t.subtotal)}</b></div><div class="summary-line" style="color:#7a7480"><span>VAT 7%</span><b>฿${money(t.vat,2)}</b></div><div style="font-size:29px;color:var(--purpleDark);font-weight:800;margin:17px 0">฿${money(t.grand,2)}</div><div class="notice ${!blocked?'ok':''}">${blocked?`ยังไม่พร้อมยืนยัน: ${t.unpriced.length} รายการรอราคา/สูตร และ ${missingPhotos} รายการยังไม่มีรูปภาพหน้างาน`:state.status==='confirmed'?'งานยืนยันแล้ว สามารถเปิดใบสั่งงานได้':'โปรดตรวจสอบรูปภาพ ขนาด และราคาก่อนกดยืนยัน'}</div><button class="btn btn-primary" data-action="approve" ${blocked?'disabled':''} style="width:100%">${state.status==='confirmed'?'✓ ยืนยันเรียบร้อยแล้ว':'ยืนยันรายละเอียดและราคา'}</button><button class="btn btn-light" data-nav="pricing" style="width:100%;margin-top:9px">ย้อนกลับไปแก้ราคา</button></div><div class="panel"><h3>สถานะและประวัติ</h3><div style="margin-top:10px">${state.events.slice(-4).reverse().map(ev=>`<div style="padding:10px 0;border-top:1px solid #eee"><b style="font-size:10px">${esc(ev.text)}</b><div class="small-muted">${esc(ev.at)}</div></div>`).join('')}</div></div></div></div>`}
+<div><div class="panel"><h3>สรุปอนุมัติงาน</h3><div class="summary-line" style="color:#7a7480"><span>ราคาก่อน VAT</span><b>฿${money(t.subtotal)}</b></div><div class="summary-line" style="color:#7a7480"><span>VAT 7%</span><b>฿${money(t.vat,2)}</b></div><div style="font-size:29px;color:var(--purpleDark);font-weight:800;margin:17px 0">฿${money(t.grand,2)}</div><div class="notice ${!blocked?'ok':''}">${blocked?`ยังไม่พร้อมยืนยัน: ${t.unpriced.length} รายการรอราคา/สูตร · รูปถ่ายไม่บังคับ`:state.status==='confirmed'?'งานยืนยันแล้ว สามารถเปิดใบสั่งงานได้':'พร้อมยืนยัน · มี ${missingPhotos} รายการไม่มีรูปถ่าย (ไม่บังคับ) · โปรดตรวจสอบขนาดและราคา'}</div><button class="btn btn-primary" data-action="approve" ${blocked?'disabled':''} style="width:100%">${state.status==='confirmed'?'✓ ยืนยันเรียบร้อยแล้ว':'ยืนยันรายละเอียดและราคา'}</button><button class="btn btn-light" data-nav="pricing" style="width:100%;margin-top:9px">ย้อนกลับไปแก้ราคา</button></div><div class="panel"><h3>สถานะและประวัติ</h3><div style="margin-top:10px">${state.events.slice(-4).reverse().map(ev=>`<div style="padding:10px 0;border-top:1px solid #eee"><b style="font-size:10px">${esc(ev.text)}</b><div class="small-muted">${esc(ev.at)}</div></div>`).join('')}</div></div></div></div>`}
 function order(){if(state.status!=='confirmed')return `${heading('STEP 04 / WORK ORDER','ใบสั่งงานสำหรับส่งต่อ','ใบงานจะสร้างจากข้อมูลชุดเดิมหลังฝ่ายขายยืนยันเรียบร้อย')}${stepper('order')}<div class="panel empty"><div class="empty-icon">▧</div><strong>รอฝ่ายขายยืนยันข้อมูล</strong><p>เพื่อป้องกันการออกใบสั่งงานจากราคาหรือขนาดที่ยังไม่ได้ตรวจสอบ<br>ตัวอย่างนี้ยังไม่คำนวณจำนวนผ้าสั่งซื้อของฝ่ายจัดซื้อ</p><button class="btn btn-primary" data-nav="review">ไปหน้าตรวจสอบ →</button></div>`;
 return `${heading('STEP 04 / WORK ORDER','ใบสั่งงานพร้อมส่งต่อ','แปลงรายการที่ยืนยันแล้วเป็นเอกสารสำหรับทีมดำเนินงาน โดยไม่ต้องพิมพ์ขนาดใหม่',`<button class="btn btn-light print-hide" data-action="print">⎙ พิมพ์ / Save PDF</button>`)}${stepper('order')}
 <div class="notice ok print-hide">${ico('check')} สถานะ: ยืนยันแล้ว — รายละเอียดด้านล่างสร้างจากข้อมูล Measurement + Pricing เดิม ไม่มีการกรอกข้อมูลซ้ำ และยังไม่รวมสูตรคำนวณจัดซื้อ</div>
@@ -198,8 +216,49 @@ function quote(){if(!state.project||state.status!=='confirmed')return `${heading
  </article><div class="form-actions print-hide"><button class="btn btn-primary" data-action="quote-print">⎙ พิมพ์ / บันทึกใบเสนอราคา PDF</button><button class="btn btn-light" data-nav="order">← ใบสั่งงาน</button></div>`;
 }
 
-function render(){nav();document.body.dataset.printDoc=route==='quote'?'quote':'order';$('#content').innerHTML=({home,measure,pricing,review,order,quote,sales})[route]();if(route==='measure')updateModeUi();document.title=`PROFACE / ${sections.find(x=>x[0]===route)?.[1]}`;}
-function goto(p){if(!sections.some(x=>x[0]===p))return;if(!state.project&&p!=='home'&&p!=='sales'){route='home';render();toast('สร้างโปรเจกต์ใหม่ก่อนเริ่มกรอกขนาด');$('#projectSetup')?.scrollIntoView({behavior:'smooth',block:'start'});return}route=p;render();window.scrollTo({top:0,behavior:'smooth'})}
+function profileGate(){
+ const gate=$('#profileGate');if(!gate)return;
+ if(profile){gate.hidden=true;document.body.classList.remove('gate-open');return}
+ document.body.classList.add('gate-open');gate.hidden=false;
+ gate.innerHTML=`<div class="gate-inner"><div class="gate-brand"><span class="gate-logo">P<span>.</span></span><div>PROFACE <small>INTERNAL WORKFLOW</small></div><span class="gate-pill">V7 UI DEMO</span></div>
+ <div class="gate-head"><div class="eyebrow">STAFF PROFILES</div><h1>ใครกำลังใช้งาน?</h1><p>เลือกโปรไฟล์เพื่อเข้าสู่พื้นที่ทำงาน · จำลองการผูกบัญชีครั้งแรก</p></div>
+ <div class="profile-grid">${profiles.map(p=>`<button class="profile-tile" data-profile="${p.key}"><span class="profile-portrait" style="--profile-color:${p.color}"><span>${p.initial}</span></span><strong>${esc(p.name)}</strong><small>${p.role==='admin'?'Full Access':'Sales'}</small>${p.name==='Showroom'?`<span class="tiny-email">${p.key==='wachida'?'Wachida':'Chanapat'}</span>`:''}</button>`).join('')}</div>
+ <div class="gate-caption">บัญชีบริษัท: proface.corporation@gmail.com · ขณะนี้เป็น <b>เดโมเลือกโปรไฟล์</b> ยังไม่มีการพิสูจน์ตัวตนหรือเข้าถึง Google</div></div>`;
+}
+function chooseProfile(key){
+ const chosen=profiles.find(x=>x.key===key);if(!chosen)return;
+ if(state.project){const snap=activeSnapshot();if(snap && !state.archive.some(x=>x.project.id===snap.project.id))state.archive.push(snap);Object.assign(state,{project:null,items:[],extras:[],status:'draft',events:[],quote:{}})}
+ profile=chosen;salesFilter=isAdmin()?'all':chosen.owner;
+ sessionStorage.setItem(profileKey,key);
+ const last=recentProjects[key];const rec=last?state.archive.find(x=>x.project?.id===last):null;
+ if(rec && accessible(rec)){const idx=state.archive.indexOf(rec);state.archive.splice(idx,1);Object.assign(state,{project:rec.project,items:rec.items,extras:rec.extras,status:rec.status,events:rec.events,quote:rec.quote||{}})}
+ save();route='home';render();toast('เข้าสู่พื้นที่ทำงาน '+chosen.name+' · Demo');
+}
+function leaveProfile(){if(profile&&state.project){recentProjects[profile.key]=state.project.id;localStorage.setItem('proface-v7-recent',JSON.stringify(recentProjects))}
+ profile=null;sessionStorage.removeItem(profileKey);route='home';render();}
+function makeProjectId(){let id;do{id='PF-'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'-'+Math.random().toString(36).slice(2,7).toUpperCase()}while(allProjects().some(x=>x.project?.id===id));return id}
+function workspaceStoragePanel(){if(!state.project)return '';
+ const p=state.project;const files=['PROJECT_INFO','MEASUREMENTS','PRICING','PHOTOS','STATUS_LOG'];
+ return `<section class="panel cloud-panel"><div class="panel-head"><div><div class="kicker">DATA HUB / STORAGE PLAN</div><h3>พื้นที่เก็บข้อมูลของ ${esc(p.id)}</h3><p class="panel-desc">ตัวอย่างโครงสร้างที่จะสร้างใน Gmail กลางเมื่อเชื่อม Backend จริง</p></div><span class="tag tag-warn">จำลอง · ยังไม่ซิงก์</span></div>
+ <div class="cloud-layout"><div class="cloud-tree"><div class="folder-strong">📁 PROFACE WORKFLOW DATA</div><div class="folder-child">📁 ${esc(p.sales)}</div><div class="folder-child inner">📂 ${esc(p.id)} · ${esc(p.name)}</div><div class="folder-child deeper">📊 ${esc(p.id)} — Project_Data</div><div class="folder-child deeper">📁 Site_Photos</div><div class="folder-child deeper">📁 Documents</div></div>
+ <div class="cloud-right"><div class="cloud-mini-head">Google Sheets · ตารางข้อมูลที่จะจัดเก็บ</div>${files.map(f=>`<span class="sheet-pill">${f}</span>`).join('')}<div class="sheet-preview-wrap"><table class="sheet-preview"><thead><tr><th>จุด</th><th>ประเภทม่าน</th><th>ขนาด (ม.)</th><th>รูป</th></tr></thead><tbody>${state.items.length?state.items.slice(0,4).map((it,i)=>`<tr><td>${esc(it.spot)}</td><td>${esc(curtainLabel(it.type))}</td><td>${money(it.width,2)} × ${money(it.height,2)}</td><td>${it.photos?.length||0}</td></tr>`).join(''):`<tr><td colspan="4" class="preview-empty">ข้อมูลจะปรากฏเมื่อบันทึกการวัดชุดแรก</td></tr>`}</tbody></table></div><button class="btn btn-soft" data-action="export-csv">⇩ ส่งออกตาราง CSV ทดลอง</button></div></div><p class="cloud-footnote">ข้อมูลจริงตอนนี้ถูกบันทึกใน LocalStorage เครื่องนี้เท่านั้น · ยังไม่มีการสร้างโฟลเดอร์หรือ Google Sheets ออนไลน์</p></section>`;
+}
+function roleNotice(){return profile&&!isAdmin()&&route==='pricing'?`<div class="notice" style="margin-bottom:16px">🔒 โปรไฟล์ฝ่ายขายสามารถดูสถานะการทำราคาได้ แต่การแก้ราคาเป็นหน้าที่ Admin/Showroom/S'Gun ใน Demo ให้สลับโปรไฟล์เพื่อทดลองการทำราคา</div>`:''}
+function workspaceHeader(){const p=state.project;const bar=$('#workspaceRibbon');if(!bar)return;
+ bar.innerHTML=profile?`<div class="workspace-ribbon"><div class="ribbon-identity"><span class="ribbon-dot"></span><strong>${p?esc(p.id)+' · '+esc(p.name):'MY WORKSPACE · '+esc(profile.name)}</strong><small>${p?`เจ้าของงาน ${esc(p.sales)} · ${state.items.length} ชุด`:`${esc(profile.email)} · ยังไม่ได้เปิดโปรเจกต์`}</small></div><div class="ribbon-actions">${p?`<span class="chip-status">${state.status==='confirmed'?'ยืนยันแล้ว':'กำลังดำเนินการ'}</span>`:''}<button class="ribbon-switch" data-action="switch-profile">⇄ เปลี่ยนโปรไฟล์</button></div></div>`:'';
+ const f=$('.side-footer');if(f)f.innerHTML=profile?`<span class="avatar">${esc(profile.initial)}</span><span><strong>${esc(profile.name)}</strong><small>${esc(profile.role==='admin'?'Full Access':'Sales · Personal')}</small></span><span class="online"></span>`:'';
+}
+function render(){profileGate();if(!profile)return;
+ nav();workspaceHeader();document.body.dataset.printDoc=route==='quote'?'quote':'order';
+ let content=({home,measure,pricing,review,order,quote,sales})[route]();
+ if(route==='home'&&state.project)content+=workspaceStoragePanel();
+ $('#content').innerHTML=roleNotice()+content;
+ if(route==='measure')updateModeUi();
+ if(!isAdmin())$$('[data-action="reset"]',$('#content')).forEach(el=>el.hidden=true);
+ if(route==='pricing'&&!isAdmin())$$('[data-price],[data-fabric],[data-seam]',$('#content')).forEach(el=>el.disabled=true);
+ document.title=`PROFACE / ${state.project?state.project.id+' / ':''}${sections.find(x=>x[0]===route)?.[1]}`;
+}
+function goto(p){if(!profile)return;if(!sections.some(x=>x[0]===p))return;if(!state.project&&p!=='home'&&p!=='sales'){route='home';render();toast('สร้างโปรเจกต์ใหม่ก่อนเริ่มกรอกขนาด');$('#projectSetup')?.scrollIntoView({behavior:'smooth',block:'start'});return}route=p;render();window.scrollTo({top:0,behavior:'smooth'})}
 function updateModeUi(){const input=$('input[name="widths"]');if(!input)return;$$('#modeSwitch button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));$('#widthLabel').textContent=mode==='multi'?'ความกว้างหลายชุด (เมตร)':'ความกว้าง (เมตร)';$('#multiHelp').textContent=mode==='multi'?'ตัวอย่าง 1.67, 1.66, 1.66, 1.66, 0.72 → จะสร้าง 5 ชุดแยกกัน แต่สูงเท่ากัน':'1 ชุด = 1 ความกว้าง × 1 ความสูง';input.placeholder=mode==='multi'?'1.67, 1.66, 1.66, 1.66, 0.72':'1.24'}
 function resetForm(){const f=$('#surveyForm');if(f)f.reset();toast('ล้างช่องกรอกแล้ว')}
 async function addFromSurvey(form){const fd=new FormData(form);const val=String(fd.get('widths')||'').trim();const ws=(mode==='multi'?val.split(/[,，;\s]+/):[val]).filter(Boolean).map(v=>Number(v));const h=Number(fd.get('height'));if(!ws.length||ws.some(w=>!(w>0))||!(h>0)){toast('กรุณากรอกความกว้างและความสูงให้ถูกต้อง');return}
@@ -221,6 +280,8 @@ function downloadOrder(){if(!state.project){toast('กรุณาสร้า�
 function exportState(){if(!state.project){toast('ยังไม่มีโปรเจกต์ให้ Export');return}downloadFile(`PROFACE_DEMO_${state.project.id}.json`,JSON.stringify({...state,calculationSummary:totals().res.map(v=>({id:v.item.id,raw:v.raw,rounded:v.rounded,valid:v.valid,reason:v.reason}))},null,2),'application/json;charset=utf-8');toast('ดาวน์โหลดข้อมูล JSON ของโปรเจกต์นี้แล้ว')}
 function resizeDataURL(file,max=720){return new Promise((resolve,reject)=>{const img=new Image();const u=URL.createObjectURL(file);img.onload=()=>{const s=Math.min(1,max/Math.max(img.width,img.height));const canvas=document.createElement('canvas');canvas.width=Math.round(img.width*s);canvas.height=Math.round(img.height*s);const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,canvas.width,canvas.height);URL.revokeObjectURL(u);resolve(canvas.toDataURL('image/jpeg',.55))};img.onerror=()=>{URL.revokeObjectURL(u);reject(Error('ไม่สามารถอ่านภาพได้'))};img.src=u})}
 document.addEventListener('click',ev=>{const button=ev.target.closest('button');if(!button)return;
+if(button.dataset.profile){chooseProfile(button.dataset.profile);return;}
+if(!profile)return;
 if(button.dataset.nav){goto(button.dataset.nav);return}
 if(button.dataset.mode){mode=button.dataset.mode;updateModeUi();return}
 if(button.dataset.openProject){switchProject(button.dataset.openProject);return}
@@ -230,35 +291,36 @@ if(button.dataset.delete){if(!confirm('ลบรายการม่านช�
 if(button.dataset.photo){uploadingItemId=button.dataset.photo;$('#photoInput').click();return}
 if(button.dataset.delExtra!==undefined){state.extras.splice(Number(button.dataset.delExtra),1);state.status='survey';save();render();toast('ลบค่าใช้จ่ายแล้ว');return}
 const act=button.dataset.action;
+if(act==='switch-profile'){leaveProfile();return}
 if(act==='close'){closeModal();return}
-if(act==='reset'){if(confirm('ลบข้อมูลทั้งหมดทุกโปรเจกต์ รวมรูปภาพและประวัติใน Demo เครื่องนี้? ข้อมูลจะกู้คืนไม่ได้')){state=defaultState();localStorage.removeItem(storageKey);route='home';render();toast('ล้างข้อมูลแล้ว พร้อมสร้างงานใหม่')}return}
+if(act==='reset'){if(!isAdmin()){toast('เฉพาะ Admin ที่ล้างข้อมูลได้');return;}if(confirm('ลบข้อมูลทั้งหมดทุกโปรเจกต์ รวมรูปภาพและประวัติใน Demo เครื่องนี้? ข้อมูลจะกู้คืนไม่ได้')){state=defaultState();localStorage.removeItem(storageKey);route='home';render();toast('ล้างข้อมูลแล้ว พร้อมสร้างงานใหม่')}return}
 
 if(act==='new-project'){if(state.project){state.archive.push(activeSnapshot());Object.assign(state,{project:null,items:[],extras:[],status:'draft',events:[],quote:{}});}save();goto('home');$('#projectSetup')?.scrollIntoView({behavior:'smooth',block:'start'});toast('พร้อมสร้างโปรเจกต์ใหม่');return}
 if(act==='export-csv'){exportCSV();return}
 if(act==='start-project'){$('#projectSetup')?.scrollIntoView({behavior:'smooth',block:'start'});$('#projectSetup input[name="name"]')?.focus({preventScroll:true});return}
 if(act==='reset-form'){resetForm();return}
-if(act==='approve'){const t=totals();if(t.unpriced.length||!state.items.length||state.items.some(it=>!(it.photos||[]).length)){toast('ยังไม่สามารถยืนยันได้: มีรายการไม่ครบ');return}state.status='confirmed';log('ฝ่ายขายยืนยันรายการขนาดและราคาสำหรับ Demo');save();goto('order');toast('ยืนยันงานแล้ว · สร้างใบสั่งงานตัวอย่างได้');return}
+if(act==='approve'){const t=totals();if(t.unpriced.length||!state.items.length){toast('ยังไม่สามารถยืนยันได้: มีรายการไม่ครบ');return}state.status='confirmed';log('ฝ่ายขายยืนยันรายการขนาดและราคาสำหรับ Demo');save();goto('order');toast('ยืนยันงานแล้ว · สร้างใบสั่งงานตัวอย่างได้');return}
 if(act==='add-extra'){addExtra();return}
 if(act==='print'){window.print();return}
 if(act==='quote-print'){if(route!=='quote'||state.status!=='confirmed'){toast('ยืนยันงานก่อนพิมพ์ใบเสนอราคา');return}window.print();return}
 if(act==='download-order'){downloadOrder();return}
 });
-document.addEventListener('submit',ev=>{if(ev.target.id==='projectForm'){ev.preventDefault();if(state.project){toast('มีโปรเจกต์แล้ว กรุณาล้างข้อมูลเพื่อเริ่มใหม่');return}const f=new FormData(ev.target);const name=String(f.get('name')||'').trim();const owner=String(f.get('sales')||'');if(!name||!salesOwners.includes(owner)){toast('กรอกชื่องานและเลือกเซลล์เจ้าของงานจากรายชื่อจริงก่อน');return}state.project={id:'PF-'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'-'+Math.floor(100+Math.random()*900),name,contact:String(f.get('contact')||'').trim(),location:String(f.get('location')||'').trim(),sales:owner,note:String(f.get('note')||'').trim()};state.quote={};state.events=[];log('สร้างโปรเจกต์ใหม่');save();goto('measure');toast('สร้างโปรเจกต์แล้ว เริ่มบันทึกจุดวัดแรกได้เลย');return}
+document.addEventListener('submit',ev=>{if(ev.target.id==='projectForm'){ev.preventDefault();if(state.project){toast('มีโปรเจกต์แล้ว กรุณาล้างข้อมูลเพื่อเริ่มใหม่');return}const f=new FormData(ev.target);const name=String(f.get('name')||'').trim();const owner=isAdmin()?String(f.get('sales')||''):profile.owner;if(!name||!salesOwners.includes(owner)){toast('กรอกชื่องานและเลือกเซลล์เจ้าของงานจากรายชื่อจริงก่อน');return}state.project={id:makeProjectId(),name,contact:String(f.get('contact')||'').trim(),location:String(f.get('location')||'').trim(),sales:owner,createdBy:profile.email,createdAt:new Date().toISOString(),note:String(f.get('note')||'').trim()};state.quote={};state.events=[];log('สร้างโปรเจกต์ใหม่');save();goto('measure');toast('สร้างโปรเจกต์แล้ว เริ่มบันทึกจุดวัดแรกได้เลย');return}
 if(ev.target.id==='surveyForm'){ev.preventDefault();addFromSurvey(ev.target)}
 if(ev.target.getAttribute('id')==='editForm'){ev.preventDefault();const f=new FormData(ev.target);const it=state.items.find(x=>x.id===f.get('id'));if(!it)return;const originalType=it.type;Object.assign(it,{type:String(f.get('type')),fabric:String(f.get('fabric')||''),floor:String(f.get('floor')),room:String(f.get('room')),spot:String(f.get('spot')),open:String(f.get('open')),width:Number(f.get('width')),height:Number(f.get('height')),notes:String(f.get('notes')||'')});if(originalType!==it.type){it.fabricMethod=null;it.areaUnit=null;it.joinWide=false;it.fabricWidth=null;it.trackRate=null;it.fabricRate=null;}state.status='survey';log(`แก้ไขขนาด ${it.id}`);save();closeModal();render();toast('บันทึกการแก้ไขแล้ว')}
 if(ev.target.id==='duplicateForm'){ev.preventDefault();const f=new FormData(ev.target);const source=state.items.find(x=>x.id===f.get('sourceId'));if(!source)return;const clone={...source,id:uid(),type:String(f.get('type')),fabric:String(f.get('fabric')||'').trim(),notes:String(f.get('notes')||''),photos:f.has('photos')?[...(source.photos||[])]:[],fabricMethod:null,areaUnit:null,joinWide:false,fabricWidth:null,trackRate:null,fabricRate:null};state.items.push(clone);state.status='survey';log('คัดลอกจุดวัดเดิมเป็นรายการสินค้าใหม่');save();closeModal();render();toast('คัดลอกรายการเรียบร้อยแล้ว · กรอกราคาของชุดใหม่ในหน้าแอดมิน');return}
 if(ev.target.id==='extraForm'){ev.preventDefault();const fd=new FormData(ev.target);state.extras.push({label:String(fd.get('label')),amount:n(fd.get('amount'))});state.status='survey';save();closeModal();render();toast('เพิ่มค่าใช้จ่ายแล้ว')}});
 document.addEventListener('change',ev=>{const input=ev.target;
-if(input.id==='salesFilter'){salesFilter=input.value;render();return}
+if(input.id==='salesFilter'){if(isAdmin())salesFilter=input.value;render();return}
 if(input.dataset.quoteField){if(!state.quote)state.quote={};state.quote[input.dataset.quoteField]=input.type==='number'?Math.max(0,n(input.value)):String(input.value);save();render();toast('อัปเดตใบเสนอราคาแล้ว');return}
-if(input.dataset.fabric){const it=state.items.find(x=>x.id===input.dataset.fabric);if(!it)return;const updated=input.value.trim();if(updated!==it.fabric){it.fabric=updated;it.fabricRate=null;it.trackRate=null;it.fabricWidth=null;it.joinWide=false;state.status='survey';save();render();toast('เปลี่ยนรหัสสินค้าแล้ว · กรุณายืนยันราคาและหน้าผ้าใหม่');}return}
-if(input.dataset.seam){const it=state.items.find(x=>x.id===input.dataset.seam);if(!it)return;it.joinWide=!!input.checked;state.status='survey';save();render();toast('อัปเดตวิธีต่อผ้าแล้ว');return}
-if(input.dataset.price){const it=state.items.find(x=>x.id===input.dataset.id);if(!it)return;const k=input.dataset.price;it[k]=(k==='fabricMethod'||k==='areaUnit')?(input.value||null):(input.value.trim()===''?null:n(input.value));if(k==='fabricMethod'&&input.value!=='wide')it.joinWide=false;state.status='survey';save();render();toast('คำนวณราคาใหม่แล้ว');return}
+if(input.dataset.fabric){if(!isAdmin()){toast('เฉพาะ Admin ที่แก้ไขราคาได้');return;}const it=state.items.find(x=>x.id===input.dataset.fabric);if(!it)return;const updated=input.value.trim();if(updated!==it.fabric){it.fabric=updated;it.fabricRate=null;it.trackRate=null;it.fabricWidth=null;it.joinWide=false;state.status='survey';save();render();toast('เปลี่ยนรหัสสินค้าแล้ว · กรุณายืนยันราคาและหน้าผ้าใหม่');}return}
+if(input.dataset.seam){if(!isAdmin()){toast('เฉพาะ Admin ที่แก้ไขราคาได้');return;}const it=state.items.find(x=>x.id===input.dataset.seam);if(!it)return;it.joinWide=!!input.checked;state.status='survey';save();render();toast('อัปเดตวิธีต่อผ้าแล้ว');return}
+if(input.dataset.price){if(!isAdmin()){toast('เฉพาะ Admin ที่แก้ไขราคาได้');return;}const it=state.items.find(x=>x.id===input.dataset.id);if(!it)return;const k=input.dataset.price;it[k]=(k==='fabricMethod'||k==='areaUnit')?(input.value||null):(input.value.trim()===''?null:n(input.value));if(k==='fabricMethod'&&input.value!=='wide')it.joinWide=false;state.status='survey';save();render();toast('คำนวณราคาใหม่แล้ว');return}
 
 });
 $('#photoInput').addEventListener('change',async ev=>{const it=state.items.find(x=>x.id===uploadingItemId);const files=Array.from(ev.target.files||[]).filter(f=>f.type.startsWith('image/'));if(!it||!files.length)return;let count=0;for(const f of files.slice(0,5)){try{const data=await resizeDataURL(f);if((it.photos||[]).length<5){(it.photos||(it.photos=[])).push(data);count++}}catch(e){}}state.status='survey';save();if(route==='measure')render();toast(`เพิ่มรูป ${count} รูปให้ ${it.spot} แล้ว`);ev.target.value='';uploadingItemId=null});
 $('#exportBtn').addEventListener('click',exportState);
 $('#modalRoot').addEventListener('click',ev=>{if(ev.target.id==='modalRoot')closeModal()});
 window.addEventListener('keydown',ev=>{if(ev.key==='Escape')closeModal()});
-render();
+try{const remembered=profiles.find(p=>p.key===sessionStorage.getItem(profileKey));if(remembered)chooseProfile(remembered.key);else render()}catch(e){render()}
 })();
