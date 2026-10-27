@@ -9,3 +9,8 @@
 @media(max-width:770px){.pricing-layout{grid-template-columns:1fr}}
 
 .survey-photo-drop{display:flex;align-items:center;gap:12px;padding:17px;border:1px dashed #bd9bdf;border-radius:12px;background:#faf6ff;color:#76509d;cursor:pointer}.survey-photo-drop .svg-icon svg{width:24px;height:24px}.survey-photo-drop span:last-child{display:flex;flex-direction:column;gap:4px}.survey-photo-drop b{font-size:12px}.survey-photo-drop small{font-size:10px;color:#a68cbd}
+
+/* V4 multi-sales dashboard */
+.history-card{display:flex;align-items:center;justify-content:space-between;gap:16px;border:1px solid #e9e6ed;border-radius:13px;padding:16px;margin:12px 0;background:white}.history-card h4{font-size:13px;margin:4px 0}.history-card p{color:#938d9c;font-size:11px;margin:0;line-height:1.8}.history-card .btn{flex-shrink:0}.price-warning{background:#fff5e8;border:1px solid #e9cf9f;color:#885c23;border-radius:9px;padding:10px 12px;margin-top:13px;font-size:11px;line-height:1.8}.price-invalid{background:#fff1f0;border:1px solid #f0c7c1;color:#a13b30;border-radius:9px;padding:12px;margin-top:13px;font-size:11px}.page-notice{background:#faf5ff;border:1px solid #ecdbfa;padding:12px 14px;border-radius:10px;font-size:11px;color:#664b83}@media(max-width:580px){.history-card{flex-direction:column;align-items:stretch}.history-card .btn{width:100%}}
+
+@media(max-width:770px){.mobile-nav{grid-template-columns:repeat(6,minmax(0,1fr));gap:0}.mobile-nav .nav-item{min-width:0;font-size:8px;padding:7px 1px}.mobile-nav .nav-item svg{width:17px;height:17px}}
