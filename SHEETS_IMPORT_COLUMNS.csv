@@ -1,1 +1,1 @@
-﻿project_id,sales_owner,project_name,contact,location,status,item_id,floor,room,spot,curtain_type,width_m,height_m,fabric_code,fabric_method,fabric_width_m,usable_fabric_m,track_rate,fabric_rate,price_raw,price_rounded,photo_count,notes
+project_id,sales_owner,project_name,contact,location,status,item_id,floor,room,spot,curtain_type,width_m,height_m,fabric_code,fabric_method,fabric_width_m,usable_fabric_m,track_rate,fabric_rate,area_unit,seam_join,price_raw,price_rounded,photo_count,notes
