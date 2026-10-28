@@ -1,7 +1,7 @@
-/* PROFACE WORKFLOW STUDIO — V8 GOOGLE AUTHENTICATION PILOT
- * V7 profile picker + scoped workspace + storage-plan preview. V6 pricing retained.
+/* PROFACE WORKFLOW STUDIO — V9 CLOUD CONNECTED PILOT
+ * V8 familiar workflow + Firebase Google sign-in + Cloudflare D1 project registry.
  * "ทำราคา กิ๊ก .xlsx", sheet "ออนไลน์", four test cases rows 7-26.
- * Firebase Auth verifies Google user identity. Business data stays in localStorage; Drive/Sheets pending.
+ * Firebase verifies Google identity; D1 is source of truth; browser is a pending-edits cache. Drive/Sheets require consent.
  */
 (()=>{
 'use strict';
@@ -12,8 +12,105 @@ const money=(n,d=0)=>(Number(n)||0).toLocaleString('th-TH',{minimumFractionDigit
 const n=v=>{const x=Number(v);return Number.isFinite(x)?x:0};
 const uid=()=>`CW-${Date.now().toString(36).slice(-5).toUpperCase()}-${Math.floor(Math.random()*900+100)}`;
 // V2 deliberately starts empty. Previous demo sample projects are never loaded.
-const storageKey='proface-workflow-demo-v7-revision1'; // Preserve Revision 01 browser data
+const storageKey=window.PROFACE_CONFIG?.cloudRequired?'proface-v9-cloud-cache':'proface-workflow-demo-v7-revision1'; // V9 browser cache (never mistaken for server confirmation)
 const authConfig=window.PROFACE_CONFIG||{mode:'demo'};
+const apiBase=String(authConfig.apiBase||'').replace(/\/$/,'');
+const cloudEnabled=()=>/^https:\/\/[^/]+$/.test(apiBase) && authConfig.mode==='firebase';
+const cloudRequired=()=>authConfig.cloudRequired===true;
+let cloudReady=!cloudEnabled(),cloudError='',cloudVersions=new Map(),cloudTimer=null,cloudSuspended=false;
+let cloudLoading=false,cloudDriveConnected=false,cloudSaving=false,cloudNeedsResave=false;
+let cloudDirty=false; // Changes are considered confirmed only after a successful D1 save
+let cloudWriteGeneration=0;
+const creationKeyStore='proface-v9-pending-create';
+function cloudCanLeave(){
+ if(!cloudEnabled() || !(cloudSaving||cloudDirty||cloudNeedsResave))return true;
+ return confirm('มีข้อมูลที่ยังไม่ยืนยันว่าบันทึกลง D1 สำเร็จ การเปลี่ยนงานอาจทำให้ข้อมูลสูญหาย ต้องการดำเนินการต่อหรือไม่?');
+}
+async function cloudRequest(path,{method='GET',body,headers={}}={}){
+  if(!cloudEnabled())throw new Error('ยังไม่ได้ตั้งค่า Cloudflare API URL ใน config.js');
+  if(!googleAuthUser)throw new Error('กรุณา Login Google ก่อน');
+  const token=await googleAuthUser.getIdToken();
+  const response=await fetch(apiBase+path,{method,headers:{Authorization:'Bearer '+token,...(body&&!(body instanceof Blob)&&!(body instanceof ArrayBuffer)?{'content-type':'application/json'}:{}),...headers},body:body===undefined?undefined:body instanceof Blob||body instanceof ArrayBuffer?body:JSON.stringify(body)});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok)throw Object.assign(new Error(data.error||'ไม่สามารถติดต่อระบบ Cloud ได้'),{status:response.status});
+  return data;
+}
+function cloudRecord(entry){
+ const data=entry.snapshot||{};
+ return {project:{id:entry.id,name:entry.name,sales:entry.sales,contact:entry.contact,location:entry.location,note:entry.note,createdAt:entry.createdAt,cloudDriveId:entry.driveFolderId,cloudSheetId:entry.sheetsFileId,cloudState:entry.syncState},items:data.items||[],extras:data.extras||[],status:data.status||entry.status||'draft',events:data.events||[],quote:data.quote||{},priceApproval:data.priceApproval||null};
+}
+async function cloudBootstrap(){
+ if(!cloudEnabled())return;
+ if((cloudDirty||cloudSaving||cloudNeedsResave)&&!cloudCanLeave())return;
+ const keepId=state.project?.id||null;
+ cloudReady=false;cloudLoading=true;cloudError='';render();
+ try{
+   const [me,projects]=await Promise.all([cloudRequest('/api/me'),cloudRequest('/api/projects')]);
+   if(me.email!==googleAuthUser.email.toLowerCase())throw new Error('บัญชี Google ไม่ตรงกับ Backend');
+   const next=defaultState();
+   for(const item of projects.projects||[]){cloudVersions.set(item.id,item.revision);const record=cloudRecord(item);if(item.deletedAt)next.deletedProjects.push(record);else next.archive.push(record);}
+   if(profile && keepId){const ix=next.archive.findIndex(r=>r.project?.id===keepId);if(ix>=0){const rec=next.archive.splice(ix,1)[0];Object.assign(next,{project:rec.project,items:rec.items,extras:rec.extras,status:rec.status,events:rec.events,quote:rec.quote,priceApproval:rec.priceApproval})}}
+   state=next;cloudDirty=false;cloudWriteGeneration=0;localStorage.setItem(storageKey,JSON.stringify(state));
+   if(me.role==='admin'){const status=await cloudRequest('/api/google/status');cloudDriveConnected=!!status.connected;}
+   cloudReady=true;cloudError='';
+ }catch(e){cloudError=e.message;cloudReady=false;toast('เชื่อม Cloud ไม่สำเร็จ: '+e.message)}
+ finally{cloudLoading=false;render()}
+}
+async function cloudPersist(){
+ if(!cloudEnabled()||!cloudReady||!state.project||cloudSuspended)return;
+ if(cloudSaving){cloudNeedsResave=true;return;}
+ cloudSaving=true;
+ const id=state.project.id;
+ const writeGeneration=cloudWriteGeneration;
+ try{
+   const revision=cloudVersions.get(id);
+   if(!revision)throw new Error('ยังไม่พบ Revision ของโปรเจกต์จากเซิร์ฟเวอร์');
+   const snapshot=activeSnapshot();
+   const response=await cloudRequest('/api/projects/'+encodeURIComponent(id),{method:'PUT',body:{revision,snapshot}});
+   cloudVersions.set(id,response.project.revision);
+   if(state.project?.id===id){
+    state.project.cloudState=response.project.syncState;
+    state.project.cloudDriveId=response.project.driveFolderId;
+    state.project.cloudSheetId=response.project.sheetsFileId;
+   }
+   if(writeGeneration===cloudWriteGeneration){cloudDirty=false;cloudError='';}
+   else {cloudNeedsResave=true;}
+   if(response.project.syncState!=='synced')cloudError=(cloudDirty?'มีรายการรอบันทึก D1 · ':'ข้อมูลอยู่ใน D1 แล้ว · ')+'Drive/Sheets ยังไม่ซิงก์: '+(response.project.syncError||'รอเชื่อมบัญชีบริษัท');
+ }catch(e){cloudDirty=true;cloudError='ข้อมูลล่าสุดยังไม่ยืนยันว่าบันทึกใน D1: '+e.message;toast(cloudError);}
+ finally{cloudSaving=false;render();if(cloudNeedsResave){cloudNeedsResave=false;clearTimeout(cloudTimer);cloudTimer=setTimeout(cloudPersist,800);}}
+}
+function scheduleCloudSave(){if(!cloudEnabled()||!cloudReady||!state.project||cloudSuspended)return;if(cloudSaving){cloudNeedsResave=true;return;}clearTimeout(cloudTimer);cloudTimer=setTimeout(cloudPersist,900)}
+async function cloudHydratePhotos(){
+ if(!cloudEnabled()||!cloudReady||!state.project)return;
+ const projectId=state.project.id;
+ try{
+   const {photos}=await cloudRequest('/api/projects/'+encodeURIComponent(projectId)+'/photos');
+   const token=await googleAuthUser.getIdToken();
+   const byItem=new Map();for(const p of photos||[]){const list=byItem.get(p.itemId)||[];list.push(p);byItem.set(p.itemId,list)}
+   for(const it of state.items){
+     const entries=byItem.get(it.id)||[];
+     const photos=it.photos||(it.photos=[]);
+     if(photos.length>=entries.length)continue; // don't duplicate pictures kept locally
+     for(const a of entries.slice(photos.length)){
+       const res=await fetch(apiBase+'/api/projects/'+encodeURIComponent(projectId)+'/photos/'+encodeURIComponent(a.photoId),{headers:{Authorization:'Bearer '+token}});
+       if(!res.ok)throw new Error('ดึงรูปภาพจาก Drive ไม่สำเร็จ: '+res.status);
+       const blob=await res.blob();
+       const dataURL=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob)});
+       photos.push(dataURL);
+     }
+   }
+   if(state.project?.id===projectId)render();
+ }catch(e){toast('มีภาพบางส่วนที่ยังโหลดจาก Google Drive ไม่สำเร็จ: '+e.message)}
+}
+async function cloudUploadPhoto(itemId,dataURL){
+ if(!cloudEnabled()||!cloudReady||!state.project)return;
+ try{
+   const parts=dataURL.split(',');const type=(parts[0].match(/data:([^;]+)/)||[])[1]||'image/jpeg';
+   const bytes=Uint8Array.from(atob(parts[1]),ch=>ch.charCodeAt(0));
+   await cloudRequest('/api/projects/'+encodeURIComponent(state.project.id)+'/photos?itemId='+encodeURIComponent(itemId),{method:'POST',body:new Blob([bytes],{type}),headers:{'content-type':type}});
+ }catch(e){cloudError='ภาพบางรูปยังไม่เข้า Google Drive: '+e.message;toast(cloudError)}
+}
+
 const GOOGLE_PILOT_PROFILES=Object.freeze({
  'natthinan.proface@gmail.com':'beam',
  'phonphotnuramrum@gmail.com':'creator'
@@ -59,7 +156,7 @@ let route='home';let mode='single';let toastTimer=null;let uploadingItemId=null;
 const rvStored=localStorage.getItem('proface-v7-review-view');
 let reviewView=['cards','table'].includes(rvStored)?rvStored:(window.matchMedia('(max-width: 800px)').matches?'cards':'table');
 const auditActor=()=>googleAuthUser?.email?googleAuthUser.email:'Demo · '+(profile?.name||'Unknown');
-function save(){try{localStorage.setItem(storageKey,JSON.stringify(state));if(profile&&state.project){recentProjects[profile.key]=state.project.id;localStorage.setItem('proface-v7-recent',JSON.stringify(recentProjects))}return true}catch(e){toast('พื้นที่จัดเก็บของเบราว์เซอร์เต็ม กรุณาลดจำนวนรูปหรือ Export ข้อมูล');return false}}
+function save(){try{localStorage.setItem(storageKey,JSON.stringify(state));if(profile&&state.project){recentProjects[profile.key]=state.project.id;localStorage.setItem('proface-v7-recent',JSON.stringify(recentProjects))}if(cloudEnabled()&&state.project&&cloudReady){cloudDirty=true;cloudWriteGeneration++;}scheduleCloudSave();return true}catch(e){toast('พื้นที่จัดเก็บของเบราว์เซอร์เต็ม กรุณาลดจำนวนรูปหรือ Export ข้อมูล');return false}}
 function toast(s){const t=$('#toast');t.textContent=s;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),3200)}
 function ico(name){const i={home:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',measure:'<path d="M3 18V6a2 2 0 0 1 2-2h13"/><path d="M7 7h10v10H7z"/><path d="M7 10h3m-3 3h2m5-6v3"/>',pricing:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 12h3m-3 4h3m5-4v4"/>',review:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M8.5 12l2 2 4.5-5"/>',order:'<path d="M7 3h9l4 4v14H7z"/><path d="M16 3v4h4M10 12h7m-7 4h7"/>',camera:'<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3"/>',check:'<path d="M4 12l5 5L20 6"/>',chevron:'<path d="M9 18l6-6-6-6"/>',plus:'<path d="M12 5v14m-7-7h14"/>',list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h1m-1 6h1m-1 6h1"/>',trend:'<path d="M3 17l6-6 4 4 8-9m-6 0h6v6"/>',shield:'<path d="M12 2l9 4v6c0 5-3.5 8-9 10-5.5-2-9-5-9-10V6z"/><path d="M8 12l3 3 5-5"/>',info:'<circle cx="12" cy="12" r="10"/><path d="M12 11v6m0-10h.01"/>'}[name]||'<circle cx="12" cy="12" r="9"/>';
 return `<span class="svg-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${i}</svg></span>`}
@@ -113,25 +210,33 @@ function pricingSignature(){return JSON.stringify({items:state.items.map(it=>[it
 function priceIsApproved(){return !!state.priceApproval && state.priceApproval.signature===pricingSignature()}
 function markChanged(reason,changeAfterApproval=false){const wasConfirmed=state.status==='confirmed';const wasApproved=!!state.priceApproval;state.priceApproval=null;state.status='survey';if(wasConfirmed||wasApproved||changeAfterApproval){state.project&&(state.project.needsReapproval=true);log('ต้องตรวจราคาใหม่: '+reason)}else{log(reason)}}
 function statusBadge(confirmed){return `<span class="status-badge ${confirmed?'status-done':'status-progress'}">${confirmed?'✓ ยืนยันแล้ว':'◷ กำลังดำเนินการ'}</span>`}
-function eraseProject(id){const rec=allProjects().find(x=>x.project?.id===id);if(!rec||!accessible(rec)){toast('ไม่มีสิทธิ์ลบโปรเจกต์นี้');return}const entered=prompt(`ยืนยันลบโปรเจกต์ ${id}\nพิมพ์รหัสงานให้ตรงเพื่อย้ายไปถังเก็บ (กู้คืนได้ใน Demo)`);if(entered!==id){toast('ยกเลิกการลบ: รหัสงานไม่ตรง');return}const record={...rec,deletedAt:new Date().toISOString(),deletedBy:auditActor()};state.deletedProjects.push(record);state.archive=state.archive.filter(r=>r.project?.id!==id);if(state.project?.id===id){Object.assign(state,{project:null,items:[],extras:[],status:'draft',events:[],quote:{},priceApproval:null});route='home'}save();render();toast('ย้ายโปรเจกต์ไปถังเก็บแล้ว (กู้คืนได้)')}
-function restoreProject(id){const ix=state.deletedProjects.findIndex(r=>r.project?.id===id);if(ix<0)return;const rec=state.deletedProjects[ix];if(!accessible(rec))return;state.deletedProjects.splice(ix,1);state.archive.push(rec);save();render();toast('กู้คืนงาน '+id+' แล้ว')}
+async function cloudEraseProject(id){
+ const entered=prompt(`ยืนยันลบโปรเจกต์ ${id}\nกรอกรหัสโปรเจกต์ให้ตรง (กู้คืนได้)`);if(entered!==id)return;
+ try{await cloudRequest('/api/projects/'+encodeURIComponent(id),{method:'DELETE'});await cloudBootstrap();toast('ย้ายงานไปถังเก็บแล้ว')}catch(e){toast(e.message)}
+}
+async function cloudRestoreProject(id){
+ try{await cloudRequest('/api/projects/'+encodeURIComponent(id)+'/restore',{method:'POST'});await cloudBootstrap();toast('กู้คืนโปรเจกต์ '+id+' แล้ว')}catch(e){toast(e.message)}
+}
+function eraseProject(id){if(cloudEnabled()){cloudEraseProject(id);return}const rec=allProjects().find(x=>x.project?.id===id);if(!rec||!accessible(rec)){toast('ไม่มีสิทธิ์ลบโปรเจกต์นี้');return}const entered=prompt(`ยืนยันลบโปรเจกต์ ${id}\nพิมพ์รหัสงานให้ตรงเพื่อย้ายไปถังเก็บ (กู้คืนได้ใน Demo)`);if(entered!==id){toast('ยกเลิกการลบ: รหัสงานไม่ตรง');return}const record={...rec,deletedAt:new Date().toISOString(),deletedBy:auditActor()};state.deletedProjects.push(record);state.archive=state.archive.filter(r=>r.project?.id!==id);if(state.project?.id===id){Object.assign(state,{project:null,items:[],extras:[],status:'draft',events:[],quote:{},priceApproval:null});route='home'}save();render();toast('ย้ายโปรเจกต์ไปถังเก็บแล้ว (กู้คืนได้)')}
+function restoreProject(id){if(cloudEnabled()){cloudRestoreProject(id);return}const ix=state.deletedProjects.findIndex(r=>r.project?.id===id);if(ix<0)return;const rec=state.deletedProjects[ix];if(!accessible(rec))return;state.deletedProjects.splice(ix,1);state.archive.push(rec);save();render();toast('กู้คืนงาน '+id+' แล้ว')}
 
 function activeSnapshot(){return state.project?{project:state.project,items:state.items,extras:state.extras,status:state.status,events:state.events,quote:state.quote,priceApproval:state.priceApproval}:null}
 function allProjects(){return [...state.archive,...(activeSnapshot()?[activeSnapshot()]:[])];}
 function ownerProjects(owner){return scopedProjects().filter(v=>v.project?.sales===owner);}
 function switchProject(id){
+ if(!cloudCanLeave())return;
  if(state.project?.id===id){goto('home');return}
  const target=state.archive.find(x=>x.project?.id===id);if(!target||!accessible(target)){toast('คุณไม่มีสิทธิ์เข้าถึงโปรเจกต์นี้');return;}
  const idx=state.archive.findIndex(x=>x.project?.id===id);if(idx<0)return;
  const chosen=state.archive.splice(idx,1)[0];const current=activeSnapshot();if(current)state.archive.push(current);
  Object.assign(state,{project:chosen.project,items:chosen.items,extras:chosen.extras,status:chosen.status,events:chosen.events,quote:chosen.quote||{},priceApproval:chosen.priceApproval||null});
- save();goto('home');toast('เปิดโปรเจกต์ '+state.project.id+' แล้ว');
+ save();goto('home');if(cloudEnabled())cloudHydratePhotos();toast('เปิดโปรเจกต์ '+state.project.id+' แล้ว');
 }
 function exportCSV(){
  const q=x=>'"'+String(x??'').replace(/"/g,'""')+'"';
  const rows=[['project_id','sales_owner','project_name','contact','location','status','item_id','floor','room','spot','curtain_type','width_m','height_m','fabric_code','fabric_method','fabric_width_m','usable_fabric_m','track_rate','fabric_rate','area_unit','seam_join','price_raw','price_rounded','photo_count','notes','offset_top_cm','offset_bottom_cm','offset_left_cm','offset_right_cm']];
  for(const rec of scopedProjects()){if(!rec.items.length)rows.push([rec.project.id,rec.project.sales,rec.project.name,rec.project.contact,rec.project.location,rec.status,...Array(23).fill('')]);for(const it of rec.items){const c=calc(it);rows.push([rec.project.id,rec.project.sales,rec.project.name,rec.project.contact,rec.project.location,rec.status,it.id,it.floor,it.room,it.spot,it.type,it.width,it.height,it.fabric,it.fabricMethod,it.fabricWidth,c.usable??'',it.trackRate,it.fabricRate,it.areaUnit||'',it.joinWide?'YES':'NO',c.valid?c.raw:'',c.valid?c.rounded:'',it.photos?.length||0,it.notes,offsetsOf(it).top??'',offsetsOf(it).bottom??'',offsetsOf(it).left??'',offsetsOf(it).right??'']);}}
- downloadFile('PROFACE_GoogleSheets_Import_V7_DEMO.csv','\ufeff'+rows.map(row=>row.map(q).join(',')).join('\r\n'),'text/csv;charset=utf-8');toast('ส่งออก CSV สำหรับนำเข้า Google Sheets แล้ว');
+ downloadFile('PROFACE_V9_D1_EXPORT_FOR_SHEETS.csv','\ufeff'+rows.map(row=>row.map(q).join(',')).join('\r\n'),'text/csv;charset=utf-8');toast('ส่งออก CSV สำหรับนำเข้า Google Sheets แล้ว');
 }
 function totals(){const res=state.items.map(item=>({item,...calc(item)}));const valid=res.filter(v=>v.valid);const unpriced=res.filter(v=>!v.valid);const subtotal=valid.reduce((a,v)=>a+v.rounded,0)+state.extras.reduce((a,x)=>a+n(x.amount),0);const vat=+(subtotal*.07).toFixed(2);return{res,valid,unpriced,subtotal,vat,grand:subtotal+vat}}
 function statCard(label,value,meta,icon){return `<div class="stat-card"><div class="stat-label">${label}${ico(icon)}</div><div class="stat-value">${value}</div><div class="stat-mini">${meta}</div></div>`}
@@ -250,12 +355,12 @@ function profileGate(){
  const gate=$('#profileGate');if(!gate)return;
  if(profile){gate.hidden=true;document.body.classList.remove('gate-open');return}
  document.body.classList.add('gate-open');gate.hidden=false;
- const live=authConfig.mode==='firebase';const eligible=!live||!!allowedProfileKey();
+ const live=authConfig.mode==='firebase';const eligible=(!live||!!allowedProfileKey())&&cloudReady;
  const visibleProfiles=live?profiles.filter(p=>p.key===allowedProfileKey()):profiles;
- gate.innerHTML=`<div class="gate-inner"><div class="gate-brand"><span class="gate-logo">P<span>.</span></span><div>PROFACE <small>INTERNAL WORKFLOW</small></div><span class="gate-pill">${live?'GOOGLE PILOT':'STAFF DEMO'}</span></div>
+ gate.innerHTML=`<div class="gate-inner"><div class="gate-brand"><span class="gate-logo">P<span>.</span></span><div>PROFACE <small>INTERNAL WORKFLOW</small></div><span class="gate-pill">${live?'GOOGLE + D1':'STAFF DEMO'}</span></div>
  <div class="gate-head"><div class="eyebrow">STAFF PROFILES</div><h1>เข้าสู่พื้นที่ทำงาน</h1><p>${live?'เข้าสู่ระบบด้วย Google ก่อนเลือกโปรไฟล์ที่ได้รับอนุญาต':'เลือก Staff สำหรับทดสอบพื้นที่ทำงาน'}</p></div>
- ${eligible?`<div class="profile-grid">${visibleProfiles.map(p=>`<button class="profile-tile" type="button" data-profile="${p.key}" title="เข้าสู่โปรไฟล์ ${esc(p.name)}"><span class="profile-portrait" style="--profile-color:${p.color}"><span>${p.initial}</span></span><strong>${esc(p.name)}</strong><small>${p.role==='admin'?'Full Access':'Sales'}</small>${p.name==='Showroom'?`<span class="tiny-email">${p.key==='wachida'?'Wachida':'Chanapat'}</span>`:''}</button>`).join('')}</div>`:`<div class="staff-login-required"><div class="staff-lock">${ico('shield')}</div><strong>เข้าสู่ระบบ PROFACE ด้วย Google</strong><p>บัญชีที่เปิดให้ทดลอง: S'Beam และ System Admin เท่านั้น</p><button class="btn btn-primary gate-signin" type="button" data-action="google-login" ${!firebaseAuth?'disabled':''}>เข้าสู่ระบบด้วย Google</button><small>${firebaseError?esc(firebaseError):(!firebaseAuth?'กำลังโหลดระบบ Google Authentication…':'ใช้บัญชี Google ของ PROFACE ที่ได้รับอนุญาต')}</small></div>`}
- <div class="gate-caption">${live&&eligible?`ยืนยันบัญชี ${esc(googleAuthUser?.email||'')} แล้ว · <b>สามารถเข้าได้เฉพาะโปรไฟล์ที่ผูกกับอีเมลนี้</b> <button type="button" class="gate-logout" data-action="google-logout">ออกจากบัญชี Google</button>`:live?'Google Login ทำงานจริง · โปรเจกต์ยังเก็บเฉพาะบนเบราว์เซอร์เครื่องนี้':'โปรไฟล์ทั้งหมดเป็นเพียง <b>โหมดจำลองสำหรับทดสอบในเบราว์เซอร์เครื่องนี้</b> ไม่ใช่การยืนยันตัวตนพนักงานจริง · ยังไม่ซิงก์ Google Drive/Sheets'}</div></div>`;
+ ${eligible?`<div class="profile-grid">${visibleProfiles.map(p=>`<button class="profile-tile" type="button" data-profile="${p.key}" title="เข้าสู่โปรไฟล์ ${esc(p.name)}"><span class="profile-portrait" style="--profile-color:${p.color}"><span>${p.initial}</span></span><strong>${esc(p.name)}</strong><small>${p.role==='admin'?'Full Access':'Sales'}</small>${p.name==='Showroom'?`<span class="tiny-email">${p.key==='wachida'?'Wachida':'Chanapat'}</span>`:''}</button>`).join('')}</div>`:`<div class="staff-login-required"><div class="staff-lock">${ico('shield')}</div><strong>เข้าสู่ระบบ PROFACE ด้วย Google</strong><p>บัญชีที่เปิดให้ทดลอง: S'Beam และ System Admin เท่านั้น</p><button class="btn btn-primary gate-signin" type="button" data-action="google-login" ${!firebaseAuth?'disabled':''}>เข้าสู่ระบบด้วย Google</button><small>${firebaseError?esc(firebaseError):cloudError?esc(cloudError):(cloudLoading?'กำลังโหลดข้อมูลจาก Cloudflare…':(!firebaseAuth?'กำลังโหลดระบบ Google Authentication…':'ใช้บัญชี Google ของ PROFACE ที่ได้รับอนุญาต'))}</small></div>`}
+ <div class="gate-caption">${live&&eligible?`ยืนยันบัญชี ${esc(googleAuthUser?.email||'')} แล้ว · <b>สามารถเข้าได้เฉพาะโปรไฟล์ที่ผูกกับอีเมลนี้</b> <button type="button" class="gate-logout" data-action="google-logout">ออกจากบัญชี Google</button>`:live?'Google Login พร้อมใช้งาน · รอเชื่อมข้อมูล D1 ก่อนเข้าทำงาน':'โปรไฟล์ทั้งหมดเป็นเพียง <b>โหมดจำลองสำหรับทดสอบในเบราว์เซอร์เครื่องนี้</b> ไม่ใช่การยืนยันตัวตนพนักงานจริง · ยังไม่ซิงก์ Google Drive/Sheets'}</div></div>`;
 }
 let firebaseAuth=null;
 async function loadFirebase(){const load=url=>new Promise((resolve,reject)=>{const sc=document.createElement('script');sc.src=url;sc.onload=resolve;sc.onerror=reject;document.head.append(sc)});
@@ -263,7 +368,7 @@ async function loadFirebase(){const load=url=>new Promise((resolve,reject)=>{con
  await load('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');await load('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js');
  firebase.initializeApp(authConfig.firebase);firebaseAuth=firebase.auth();
  await firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
- firebaseAuth.onAuthStateChanged(user=>{
+ firebaseAuth.onAuthStateChanged(async user=>{
    const mail=String(user?.email||'').trim().toLowerCase();
    const authorized=!!GOOGLE_PILOT_PROFILES[mail] && !!user?.emailVerified &&
      !!user?.providerData?.some(p=>p.providerId==='google.com');
@@ -271,10 +376,10 @@ async function loadFirebase(){const load=url=>new Promise((resolve,reject)=>{con
      if(googleAuthUser?.uid!==user.uid || (profile && profile.key!==GOOGLE_PILOT_PROFILES[mail])){
        profile=null;sessionStorage.removeItem(profileKey);route='home';
      }
-     googleAuthUser=user;firebaseError='';render();
+     googleAuthUser=user;firebaseError='';if(cloudEnabled())await cloudBootstrap();else render();
    }else{
      googleAuthUser=null;profile=null;sessionStorage.removeItem(profileKey);route='home';render();
-     if(user)firebaseAuth.signOut().catch(()=>{}).finally(()=>toast('บัญชีนี้ยังไม่ได้รับอนุญาตให้ใช้ PROFACE V8'));
+     if(user)firebaseAuth.signOut().catch(()=>{}).finally(()=>toast('บัญชีนี้ยังไม่ได้รับอนุญาตให้ใช้ PROFACE V9'));
    }
  },err=>{
    googleAuthUser=null;profile=null;sessionStorage.removeItem(profileKey);
@@ -286,24 +391,31 @@ async function loadFirebase(){const load=url=>new Promise((resolve,reject)=>{con
 async function signInGoogle(){if(!firebaseAuth)return toast('ตั้งค่า Firebase และเปิดเว็บผ่าน HTTPS ก่อน');try{await firebaseAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider())}catch(err){toast('ไม่สามารถเข้าสู่ระบบ Google: '+(err.code||err.message))}}
 function chooseProfile(key){
  if(authConfig.mode==='firebase'&&key!==allowedProfileKey()){toast('คุณไม่มีสิทธิ์เลือกโปรไฟล์นี้');return;}
+ if(cloudEnabled()&&!cloudReady){toast('รอเชื่อม Cloudflare ให้สำเร็จก่อน');return;}
  const chosen=profiles.find(x=>x.key===key);if(!chosen)return;
  if(state.project){const snap=activeSnapshot();if(snap && !state.archive.some(x=>x.project.id===snap.project.id))state.archive.push(snap);Object.assign(state,{project:null,items:[],extras:[],status:'draft',events:[],quote:{},priceApproval:null})}
  profile=chosen;salesFilter=isAdmin()?'all':chosen.owner;
  sessionStorage.setItem(profileKey,key);
  const last=recentProjects[key];const rec=last?state.archive.find(x=>x.project?.id===last):null;
  if(rec && accessible(rec)){const idx=state.archive.indexOf(rec);state.archive.splice(idx,1);Object.assign(state,{project:rec.project,items:rec.items,extras:rec.extras,status:rec.status,events:rec.events,quote:rec.quote||{},priceApproval:rec.priceApproval||null})}
- save();route='home';render();toast('เข้าสู่พื้นที่ทำงาน '+chosen.name+(authConfig.mode==='firebase'?' · ยืนยัน Google แล้ว':' · Demo'));
+ save();route='home';render();if(cloudEnabled()&&state.project)cloudHydratePhotos();toast('เข้าสู่พื้นที่ทำงาน '+chosen.name+(authConfig.mode==='firebase'?' · ยืนยัน Google แล้ว':' · Demo'));
 }
 function leaveProfile(){if(profile&&state.project){recentProjects[profile.key]=state.project.id;localStorage.setItem('proface-v7-recent',JSON.stringify(recentProjects))}
  profile=null;sessionStorage.removeItem(profileKey);route='home';render();}
-function makeProjectId(){let id;do{id='PF-'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'-'+Math.random().toString(36).slice(2,7).toUpperCase()}while(allProjects().some(x=>x.project?.id===id));return id}
+function makeProjectId(){if(cloudRequired())throw new Error('Cloud mode ต้องขอเลขจาก Cloudflare เท่านั้น');let id;do{id='PF-'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'-'+Math.random().toString(36).slice(2,7).toUpperCase()}while(allProjects().some(x=>x.project?.id===id));return id}
 function workspaceStoragePanel(){if(!state.project)return '';
- const p=state.project;const files=['PROJECT_INFO','MEASUREMENTS','PRICING','PHOTOS','STATUS_LOG'];
+ const p=state.project;
+ if(cloudEnabled()){
+  const folder=p.cloudDriveId?`<a href="https://drive.google.com/drive/folders/${encodeURIComponent(p.cloudDriveId)}" target="_blank" rel="noopener noreferrer">เปิดโฟลเดอร์ Google Drive</a>`:'ยังไม่ได้สร้างโฟลเดอร์ Drive';
+  const sheet=p.cloudSheetId?`<a href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(p.cloudSheetId)}/edit" target="_blank" rel="noopener noreferrer">เปิด Google Sheet ของงานนี้</a>`:'ยังไม่ได้สร้าง Google Sheet';
+  return `<section class="panel cloud-panel"><div class="panel-head"><div><div class="kicker">V9 / COMPANY DATA HUB</div><h3>${esc(p.id)}</h3><p class="panel-desc">ทะเบียนโครงการอยู่ใน Cloudflare D1; โฟลเดอร์และชีตใช้สิทธิ์บัญชีบริษัท</p></div><span class="tag ${p.cloudState==='synced'?'':'tag-warn'}">${p.cloudState==='synced'?'Drive/Sheets ซิงก์แล้ว':'Drive/Sheets '+esc(p.cloudState||'รอดำเนินการ')}</span></div><div class="cloud-layout"><div class="cloud-tree"><div class="folder-strong">☁ Cloudflare D1: ${esc(p.id)}</div><div class="folder-child">📁 งานขายปี / เดือน / ${esc(p.sales)} / ${esc(p.id)}</div><div class="folder-child inner">${folder}</div><div class="folder-child inner">${sheet}</div></div><div class="cloud-right"><div class="cloud-mini-head">สถานะ</div><p>ลงทะเบียนจาก Firebase: ${esc(googleAuthUser?.email||'')}</p><p>ข้อมูล D1: ${cloudSaving?'กำลังบันทึก…':cloudDirty?'มีรายการรอบันทึก':'พร้อมตรวจสอบ'}</p><p>Drive OAuth: ${cloudDriveConnected?'เชื่อมแล้ว':'ยังไม่เชื่อม'}</p><button class="btn btn-light" data-action="cloud-retry" type="button">ลองซิงก์ Drive/Sheets</button></div></div></section>`;
+ }
+const files=['PROJECT_INFO','MEASUREMENTS','PRICING','PHOTOS','STATUS_LOG'];
  return `<section class="panel cloud-panel"><div class="panel-head"><div><div class="kicker">DATA HUB / STORAGE PLAN</div><h3>พื้นที่เก็บข้อมูลของ ${esc(p.id)}</h3><p class="panel-desc">ตัวอย่างโครงสร้างที่จะสร้างใน Gmail กลางเมื่อเชื่อม Backend จริง</p></div><span class="tag tag-warn">จำลอง · ยังไม่ซิงก์</span></div>
  <div class="cloud-layout"><div class="cloud-tree"><div class="folder-strong">📁 PROFACE WORKFLOW DATA</div><div class="folder-child">📁 ${esc(p.sales)}</div><div class="folder-child inner">📂 ${esc(p.id)} · ${esc(p.name)}</div><div class="folder-child deeper">📊 ${esc(p.id)} — Project_Data</div><div class="folder-child deeper">📁 Site_Photos</div><div class="folder-child deeper">📁 Documents</div></div>
  <div class="cloud-right"><div class="cloud-mini-head">Google Sheets · ตารางข้อมูลที่จะจัดเก็บ</div>${files.map(f=>`<span class="sheet-pill">${f}</span>`).join('')}<div class="sheet-preview-wrap"><table class="sheet-preview"><thead><tr><th>จุด</th><th>ประเภทม่าน</th><th>ขนาด (ม.)</th><th>รูป</th></tr></thead><tbody>${state.items.length?state.items.slice(0,4).map((it,i)=>`<tr><td>${esc(it.spot)}</td><td>${esc(curtainLabel(it.type))}</td><td>${money(it.width,2)} × ${money(it.height,2)}</td><td>${it.photos?.length||0}</td></tr>`).join(''):`<tr><td colspan="4" class="preview-empty">ข้อมูลจะปรากฏเมื่อบันทึกการวัดชุดแรก</td></tr>`}</tbody></table></div><button class="btn btn-soft" data-action="export-csv">⇩ ส่งออกตาราง CSV ทดลอง</button></div></div><p class="cloud-footnote">ข้อมูลจริงตอนนี้ถูกบันทึกใน LocalStorage เครื่องนี้เท่านั้น · ยังไม่มีการสร้างโฟลเดอร์หรือ Google Sheets ออนไลน์</p></section>`;
 }
-function roleNotice(){return (authConfig.mode==='firebase'?`<div class="notice" style="margin-bottom:16px">✓ เข้าสู่ระบบด้วย Google: ${esc(googleAuthUser?.email||'')} · V8 Login Pilot — ข้อมูลโปรเจกต์ยังบันทึกเฉพาะในเบราว์เซอร์ ไม่ได้ซิงก์ Google Drive/Sheets</div>`:'')+(profile&&!isAdmin()&&route==='pricing'?`<div class="notice" style="margin-bottom:16px">🔒 ฝ่ายขายดูสถานะราคาได้ แต่แก้ราคาและอนุมัติราคาได้เฉพาะ Admin</div>`:'')}
+function roleNotice(){return (cloudRequired()&&!cloudEnabled()?`<div class="notice" style="margin-bottom:16px;color:#a12828"><b>⚠️ Cloudflare ยังไม่เชื่อม: เปิด Google Login ได้ แต่ปิดการสร้างโครงการจริงไว้ก่อน</b> · โปรด Deploy Worker และใส่ apiBase ใน config.js</div>`:'')+(cloudEnabled()?`<div class="notice" style="margin-bottom:16px">☁ PROFACE V9 Cloud · Login: ${esc(googleAuthUser?.email||'')} · ${cloudError?`<b style="color:#ae2c2c">${esc(cloudError)}</b>`:(cloudSaving?'กำลังบันทึก D1…':cloudDirty?'⚠ ข้อมูลรอบันทึก D1':'D1 พร้อมใช้งาน')+' · Google Drive/Sheets '+(cloudDriveConnected?'เชื่อมสิทธิ์แล้ว':'ยังไม่ได้เชื่อมสิทธิ์')} <button type="button" class="btn btn-light" data-action="cloud-refresh">รีเฟรชข้อมูล Cloud</button>${isAdmin()&&!cloudDriveConnected?` <button type="button" class="btn btn-primary" data-action="cloud-connect">เชื่อม Gmail บริษัท</button>`:''}${state.project?.cloudState==='error'?` <button type="button" class="btn btn-light" data-action="cloud-retry">ลองซิงก์ Drive อีกครั้ง</button>`:''}</div>`:(authConfig.mode==='firebase'?`<div class="notice" style="margin-bottom:16px">✓ เข้าสู่ระบบด้วย Google: ${esc(googleAuthUser?.email||'')} · Google Login Pilot · ตรวจ Cloudflare API ก่อนสร้างงาน</div>`:''))+(profile&&!isAdmin()&&route==='pricing'?`<div class="notice" style="margin-bottom:16px">🔒 ฝ่ายขายดูสถานะราคาได้ แต่แก้ราคาและอนุมัติราคาได้เฉพาะ Admin</div>`:'')}
 function workspaceHeader(){const p=state.project;const bar=$('#workspaceRibbon');if(!bar)return;
  bar.innerHTML=profile?`<div class="workspace-ribbon"><div class="ribbon-identity"><span class="ribbon-dot"></span><strong>${p?esc(p.id)+' · '+esc(p.name):'MY WORKSPACE · '+esc(profile.name)}</strong><small>${p?`เจ้าของงาน ${esc(p.sales)} · ${state.items.length} ชุด`:`${esc(profile.email)} · ยังไม่ได้เปิดโปรเจกต์`}</small></div><div class="ribbon-actions">${p?`<span class="chip-status">${state.status==='confirmed'?'ยืนยันแล้ว':'กำลังดำเนินการ'}</span>`:''}<button class="ribbon-switch" data-action="switch-profile">⇄ เปลี่ยน Staff</button>${authConfig.mode==='firebase'?`<button class="ribbon-switch" data-action="google-logout">ออกจาก Google</button>`:''}</div></div>`:'';
  const f=$('.side-footer');if(f)f.innerHTML=profile?`<span class="avatar">${esc(profile.initial)}</span><span><strong>${esc(profile.name)}</strong><small>${esc(profile.role==='admin'?'Full Access':'Sales · Personal')}</small></span><span class="online"></span>`:'';
@@ -311,7 +423,10 @@ function workspaceHeader(){const p=state.project;const bar=$('#workspaceRibbon')
 function render(){profileGate();if(!profile){$('#content').innerHTML='';$('#workspaceRibbon').innerHTML='';return;}
  nav();workspaceHeader();document.body.dataset.printDoc=route==='quote'?'quote':'order';
  let content=({home,measure,pricing,review,order,quote,sales})[route]();
- if(route==='home'&&state.project)content+=workspaceStoragePanel();
+ if(route==='home'&&state.project){
+ if(cloudEnabled())content+=`<section class="panel" style="margin-top:18px;padding:18px"><h3>Google Drive / Sheets ของงานนี้</h3><p>สถานะ: ${esc(state.project.cloudState||'pending')}</p>${state.project.cloudDriveId?`<p><a href="https://drive.google.com/drive/folders/${encodeURIComponent(state.project.cloudDriveId)}" target="_blank" rel="noopener noreferrer">เปิดโฟลเดอร์งานใน Google Drive</a></p>`:''}${state.project.cloudSheetId?`<p><a href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(state.project.cloudSheetId)}/edit" target="_blank" rel="noopener noreferrer">เปิด Project_Data ใน Google Sheets</a></p>`:''}</section>`;
+ else content+=workspaceStoragePanel();
+ }
  $('#content').innerHTML=roleNotice()+content;
  if(route==='measure')updateModeUi();
  if(!isAdmin())$$('[data-action="reset"]',$('#content')).forEach(el=>el.hidden=true);
@@ -338,13 +453,13 @@ function duplicateItem(id){const it=state.items.find(x=>x.id===id);if(!it)return
 function addExtra(){modal(`<div class="modal-title"><h3>เพิ่มค่าใช้จ่ายอื่น</h3><button class="icon-only" data-action="close">×</button></div><p class="page-sub">รายการเหล่านี้ให้แอดมินป้อนยอดเองใน Demo ยังไม่ได้เชื่อมสูตรอุปกรณ์อื่น</p><form id="extraForm"><div class="field-grid"><div class="field"><label>ชื่อรายการ</label><input required name="label" placeholder="เช่น ค่าติดตั้ง"/></div><div class="field"><label>จำนวนเงิน (บาท)</label><input required type="number" min="0" step="1" name="amount" placeholder="2500"/></div></div><div class="form-actions"><button type="submit" class="btn btn-primary">เพิ่มรายการ</button><button class="btn btn-light" type="button" data-action="close">ยกเลิก</button></div></form>`)}
 function downloadFile(name,text,type='text/plain;charset=utf-8'){const blob=new Blob([text],{type});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500)}
 function downloadOrder(){if(!state.project){toast('กรุณาสร้างโปรเจกต์ก่อน');return}const lines=[`PROFACE / ใบสั่งงาน — ${state.project.id}`,`ชื่องาน: ${state.project.name}`,`สถานที่: ${state.project.location}`,`ฝ่ายขาย: ${state.project.sales}`,'',...state.items.map((it,i)=>`${i+1}. ${it.floor} / ${it.room} / ${it.spot}\n   ${curtainLabel(it.type)} · ${it.fabric} · ${it.width} × ${it.height} ม. · ${it.open} · ${it.track} · ${areaCurtains.has(it.type)?(areaUnitNames[it.areaUnit]||"รอเลือกหน่วย"):(fabricMethods[it.fabricMethod]||"รอเลือกสูตร")}${it.joinWide?" [ต่อผ้า]":""}\n   ระยะติดตั้ง (ซม.): บน ${offsetsOf(it).top??'-'} ล่าง ${offsetsOf(it).bottom??'-'} ซ้าย ${offsetsOf(it).left??'-'} ขวา ${offsetsOf(it).right??'-'}
-   หมายเหตุ: ${it.notes||'-'} · รูปแนบ ${it.photos?.length||0} รูป`),'','หมายเหตุ: ไฟล์ตัวอย่างนี้ยังไม่รวมสูตรคำนวณจัดซื้อ'];downloadFile(`PROFACE_WORK_ORDER_${state.project.id}.txt`,lines.join('\n'))}
-function exportState(){if(!state.project){toast('ยังไม่มีโปรเจกต์ให้ Export');return}downloadFile(`PROFACE_DEMO_${state.project.id}.json`,JSON.stringify({...state,calculationSummary:totals().res.map(v=>({id:v.item.id,raw:v.raw,rounded:v.rounded,valid:v.valid,reason:v.reason}))},null,2),'application/json;charset=utf-8');toast('ดาวน์โหลดข้อมูล JSON ของโปรเจกต์นี้แล้ว')}
+   หมายเหตุ: ${it.notes||'-'} · รูปแนบ ${it.photos?.length||0} รูป`),'','หมายเหตุ: เอกสารนี้มีเฉพาะรายการขนาดติดตั้ง ยังไม่รวมสูตรคำนวณจัดซื้อ'];downloadFile(`PROFACE_WORK_ORDER_${state.project.id}.txt`,lines.join('\n'))}
+function exportState(){if(!state.project){toast('ยังไม่มีโปรเจกต์ให้ Export');return}downloadFile(`PROFACE_V9_BACKUP_${state.project.id}.json`,JSON.stringify({...state,calculationSummary:totals().res.map(v=>({id:v.item.id,raw:v.raw,rounded:v.rounded,valid:v.valid,reason:v.reason}))},null,2),'application/json;charset=utf-8');toast('ดาวน์โหลดข้อมูล JSON ของโปรเจกต์นี้แล้ว')}
 function resizeDataURL(file,max=720){return new Promise((resolve,reject)=>{const img=new Image();const u=URL.createObjectURL(file);img.onload=()=>{const s=Math.min(1,max/Math.max(img.width,img.height));const canvas=document.createElement('canvas');canvas.width=Math.round(img.width*s);canvas.height=Math.round(img.height*s);const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,canvas.width,canvas.height);URL.revokeObjectURL(u);resolve(canvas.toDataURL('image/jpeg',.55))};img.onerror=()=>{URL.revokeObjectURL(u);reject(Error('ไม่สามารถอ่านภาพได้'))};img.src=u})}
 document.addEventListener('click',ev=>{const button=ev.target.closest('button');if(!button)return;
 if(button.dataset.action==='demo-login'&&authConfig.mode==='demo'){chooseProfile('creator');return}
 if(button.dataset.action==='google-login'){signInGoogle();return}
-if(button.dataset.action==='google-logout'&&authConfig.mode==='firebase'){profile=null;googleAuthUser=null;sessionStorage.removeItem(profileKey);route='home';render();firebaseAuth?.signOut().catch(err=>toast('ออกจากระบบไม่สำเร็จ: '+err.message));return}
+if(button.dataset.action==='google-logout'&&authConfig.mode==='firebase'){if(!cloudCanLeave())return;profile=null;googleAuthUser=null;sessionStorage.removeItem(profileKey);route='home';render();firebaseAuth?.signOut().catch(err=>toast('ออกจากระบบไม่สำเร็จ: '+err.message));return}
 if(button.dataset.profile){chooseProfile(button.dataset.profile);return;}
 if(!profile)return;
 if(button.dataset.nav){goto(button.dataset.nav);return}
@@ -359,11 +474,14 @@ if(button.dataset.delete){if(!confirm('ลบรายการม่านช�
 if(button.dataset.photo){uploadingItemId=button.dataset.photo;$('#photoInput').click();return}
 if(button.dataset.delExtra!==undefined){state.extras.splice(Number(button.dataset.delExtra),1);markChanged('ลบค่าบริการ');save();render();toast('ลบค่าใช้จ่ายแล้ว');return}
 const act=button.dataset.action;
-if(act==='switch-profile'){leaveProfile();return}
+if(act==='switch-profile'){if(!cloudCanLeave())return;leaveProfile();return}
+if(act==='cloud-refresh'){cloudBootstrap();return}
+if(act==='cloud-retry'){if(state.project)cloudRequest('/api/projects/'+encodeURIComponent(state.project.id)+'/sync',{method:'POST'}).then(r=>{state.project.cloudState=r.project.syncState;state.project.cloudDriveId=r.project.driveFolderId;state.project.cloudSheetId=r.project.sheetsFileId;render();toast(r.sync.ok?'Google Drive/Sheets ซิงก์สำเร็จ':'ยังซิงก์ไม่สำเร็จ: '+r.sync.error)}).catch(e=>toast(e.message));return}
+if(act==='cloud-connect'){if(!confirm('คำเตือน: Backend รุ่นทดสอบยังขอสิทธิ์จัดการ Google Drive ทั้งบัญชีบริษัท\n\nควรตรวจขอบเขตสิทธิ์และหน้า Privacy Policy ก่อนอนุญาต\n\nต้องการเปิดหน้าขออนุญาต Google จริงหรือไม่?'))return;cloudRequest('/api/google/connect',{method:'POST'}).then(r=>location.assign(r.url)).catch(e=>toast(e.message));return}
 if(act==='close'){closeModal();return}
-if(act==='reset'){if(!isAdmin()){toast('เฉพาะ Admin ที่ล้างข้อมูลได้');return;}if(confirm('ลบข้อมูลทั้งหมดทุกโปรเจกต์ รวมรูปภาพและประวัติใน Demo เครื่องนี้? ข้อมูลจะกู้คืนไม่ได้')){state=defaultState();localStorage.removeItem(storageKey);route='home';render();toast('ล้างข้อมูลแล้ว พร้อมสร้างงานใหม่')}return}
+if(act==='reset'){if(cloudEnabled()){toast('ปิดล้างข้อมูลทั้งหมดในโหมด Cloud เพื่อความปลอดภัย');return;}if(!isAdmin()){toast('เฉพาะ Admin ที่ล้างข้อมูลได้');return;}if(confirm('ลบข้อมูลทั้งหมดทุกโปรเจกต์ รวมรูปภาพและประวัติใน Demo เครื่องนี้? ข้อมูลจะกู้คืนไม่ได้')){state=defaultState();localStorage.removeItem(storageKey);route='home';render();toast('ล้างข้อมูลแล้ว พร้อมสร้างงานใหม่')}return}
 
-if(act==='new-project'){if(state.project){state.archive.push(activeSnapshot());Object.assign(state,{project:null,items:[],extras:[],status:'draft',events:[],quote:{},priceApproval:null});}save();goto('home');$('#projectSetup')?.scrollIntoView({behavior:'smooth',block:'start'});toast('พร้อมสร้างโปรเจกต์ใหม่');return}
+if(act==='new-project'){if(!cloudCanLeave())return;if(state.project){state.archive.push(activeSnapshot());Object.assign(state,{project:null,items:[],extras:[],status:'draft',events:[],quote:{},priceApproval:null});}save();goto('home');$('#projectSetup')?.scrollIntoView({behavior:'smooth',block:'start'});toast('พร้อมสร้างโปรเจกต์ใหม่');return}
 if(act==='export-csv'){exportCSV();return}
 if(act==='start-project'){$('#projectSetup')?.scrollIntoView({behavior:'smooth',block:'start'});$('#projectSetup input[name="name"]')?.focus({preventScroll:true});return}
 if(act==='reset-form'){resetForm();return}
@@ -374,7 +492,23 @@ if(act==='print'){window.print();return}
 if(act==='quote-print'){if(route!=='quote'||state.status!=='confirmed'){toast('ยืนยันงานก่อนพิมพ์ใบเสนอราคา');return}window.print();return}
 if(act==='download-order'){downloadOrder();return}
 });
-document.addEventListener('submit',ev=>{if(ev.target.id==='projectForm'){ev.preventDefault();if(state.project){toast('มีโปรเจกต์แล้ว กรุณาล้างข้อมูลเพื่อเริ่มใหม่');return}const f=new FormData(ev.target);const name=String(f.get('name')||'').trim();const owner=isAdmin()?String(f.get('sales')||''):profile.owner;if(!name||!salesOwners.includes(owner)){toast('กรอกชื่องานและเลือกเซลล์เจ้าของงานจากรายชื่อจริงก่อน');return}state.project={id:makeProjectId(),name,contact:String(f.get('contact')||'').trim(),location:String(f.get('location')||'').trim(),sales:owner,createdBy:auditActor(),createdAt:new Date().toISOString(),note:String(f.get('note')||'').trim()};state.quote={};state.priceApproval=null;state.events=[];log('สร้างโปรเจกต์ใหม่');save();goto('measure');toast('สร้างโปรเจกต์แล้ว เริ่มบันทึกจุดวัดแรกได้เลย');return}
+document.addEventListener('submit',async ev=>{if(ev.target.id==='projectForm'){ev.preventDefault();if(state.project){toast('มีโปรเจกต์แล้ว กรุณาล้างข้อมูลเพื่อเริ่มใหม่');return}const f=new FormData(ev.target);const name=String(f.get('name')||'').trim();const owner=isAdmin()?String(f.get('sales')||''):profile.owner;if(!name||!salesOwners.includes(owner)){toast('กรอกชื่องานและเลือกเซลล์เจ้าของงานจากรายชื่อจริงก่อน');return}if(cloudRequired()&&!cloudEnabled()){toast('ยังไม่ได้ตั้งค่า Cloudflare API URL; ไม่สามารถออกเลขงานจริงได้');return;}
+ if(cloudEnabled()){
+ if(!cloudReady){toast('ยังเชื่อม Cloudflare ไม่สำเร็จ กรุณาตรวจ API URL');return}
+ const button=ev.target.querySelector('button[type="submit"]');if(button.disabled)return;button.disabled=true;
+ try{
+   const key=sessionStorage.getItem(creationKeyStore)||crypto.randomUUID().replaceAll('-','');
+   sessionStorage.setItem(creationKeyStore,key);
+   const response=await cloudRequest('/api/projects',{method:'POST',body:{name,contact:String(f.get('contact')||'').trim(),location:String(f.get('location')||'').trim(),sales:owner,note:String(f.get('note')||'').trim()},headers:{'Idempotency-Key':key}});
+   sessionStorage.removeItem(creationKeyStore);
+   cloudVersions.set(response.project.id,response.project.revision);
+   state.project={id:response.project.id,name:response.project.name,contact:response.project.contact,location:response.project.location,sales:response.project.sales,note:response.project.note,createdAt:response.project.createdAt,createdBy:auditActor(),cloudDriveId:response.project.driveFolderId,cloudSheetId:response.project.sheetsFileId,cloudState:response.project.syncState};
+   state.quote={};state.priceApproval=null;state.events=[];
+   log('สร้างโปรเจกต์ใหม่ด้วย Cloudflare · '+state.project.id);save();goto('measure');
+   toast(response.project.syncState==='synced'?'สร้างงานและไฟล์บน Google สำเร็จ':'ออกเลขโปรเจกต์จาก D1 แล้ว · Drive/Sheets ยังไม่ซิงก์ กรุณาให้ Admin เชื่อม Gmail บริษัท');
+ }catch(e){toast('ไม่สามารถสร้างงานบน Cloudflare: '+e.message);button.disabled=false;}return;
+ }
+ state.project={id:makeProjectId(),name,contact:String(f.get('contact')||'').trim(),location:String(f.get('location')||'').trim(),sales:owner,createdBy:auditActor(),createdAt:new Date().toISOString(),note:String(f.get('note')||'').trim()};state.quote={};state.priceApproval=null;state.events=[];log('สร้างโปรเจกต์ใหม่');save();goto('measure');toast('สร้างโปรเจกต์แล้ว เริ่มบันทึกจุดวัดแรกได้เลย');return}
 if(ev.target.id==='surveyForm'){ev.preventDefault();addFromSurvey(ev.target)}
 if(ev.target.getAttribute('id')==='editForm'){ev.preventDefault();const f=new FormData(ev.target);const it=state.items.find(x=>x.id===f.get('id'));if(!it)return;const originalType=it.type;const before={width:it.width,height:it.height,offsets:offsetsOf(it),type:it.type};Object.assign(it,{type:String(f.get('type')),fabric:String(f.get('fabric')||''),floor:String(f.get('floor')),room:String(f.get('room')),spot:String(f.get('spot')),open:String(f.get('open')),width:Number(f.get('width')),height:Number(f.get('height')),notes:String(f.get('notes')||''),offsets:{top:readOffset(f.get('offset_top')),bottom:readOffset(f.get('offset_bottom')),left:readOffset(f.get('offset_left')),right:readOffset(f.get('offset_right'))}});const diff=JSON.stringify(before)!==JSON.stringify({width:it.width,height:it.height,offsets:offsetsOf(it),type:it.type});if(diff)(it.revisions||(it.revisions=[])).push({before,after:{width:it.width,height:it.height,offsets:offsetsOf(it),type:it.type},by:auditActor(),at:new Date().toISOString()});if(originalType!==it.type){it.fabricMethod=null;it.areaUnit=null;it.joinWide=false;it.fabricWidth=null;it.trackRate=null;it.fabricRate=null;}markChanged(`แก้ไขขนาด/ข้อมูล ${it.id}`);save();closeModal();render();toast('บันทึกการแก้ไขแล้ว · หากเคยอนุมัติราคา ต้องให้แอดมินตรวจใหม่')}
 if(ev.target.id==='duplicateForm'){ev.preventDefault();const f=new FormData(ev.target);const source=state.items.find(x=>x.id===f.get('sourceId'));if(!source)return;const clone={...source,id:uid(),type:String(f.get('type')),fabric:String(f.get('fabric')||'').trim(),notes:String(f.get('notes')||''),photos:f.has('photos')?[...(source.photos||[])]:[],fabricMethod:null,areaUnit:null,joinWide:false,fabricWidth:null,trackRate:null,fabricRate:null,revisions:[]};state.items.push(clone);markChanged('คัดลอกจุดวัดเดิมเป็นรายการสินค้าใหม่');save();closeModal();render();toast('คัดลอกรายการเรียบร้อยแล้ว · กรอกราคาของชุดใหม่ในหน้าแอดมิน');return}
@@ -388,7 +522,7 @@ if(input.dataset.seam){if(!isAdmin()){toast('เฉพาะ Admin ที่แ�
 if(input.dataset.price){if(!isAdmin()){toast('เฉพาะ Admin ที่แก้ไขราคาได้');return;}const it=state.items.find(x=>x.id===input.dataset.id);if(!it)return;const k=input.dataset.price;it[k]=(k==='fabricMethod'||k==='areaUnit')?(input.value||null):(input.value.trim()===''?null:n(input.value));if(k==='fabricMethod'&&input.value!=='wide')it.joinWide=false;markChanged('ปรับราคา/สูตร · รออนุมัติใหม่');save();render();toast('คำนวณราคาใหม่แล้ว · รออนุมัติ');return}
 
 });
-$('#photoInput').addEventListener('change',async ev=>{const it=state.items.find(x=>x.id===uploadingItemId);const files=Array.from(ev.target.files||[]).filter(f=>f.type.startsWith('image/'));if(!it||!files.length)return;let count=0;for(const f of files.slice(0,5)){try{const data=await resizeDataURL(f);if((it.photos||[]).length<5){(it.photos||(it.photos=[])).push(data);count++}}catch(e){}}log('เพิ่มรูปภาพหน้างาน');save();if(route==='measure')render();toast(`เพิ่มรูป ${count} รูปให้ ${it.spot} แล้ว`);ev.target.value='';uploadingItemId=null});
+$('#photoInput').addEventListener('change',async ev=>{const it=state.items.find(x=>x.id===uploadingItemId);const files=Array.from(ev.target.files||[]).filter(f=>f.type.startsWith('image/'));if(!it||!files.length)return;let count=0;for(const f of files.slice(0,5)){try{const data=await resizeDataURL(f);if((it.photos||[]).length<5){(it.photos||(it.photos=[])).push(data);count++;if(cloudEnabled())cloudUploadPhoto(it.id,data)}}catch(e){}}log('เพิ่มรูปภาพหน้างาน');save();if(route==='measure')render();toast(`เพิ่มรูป ${count} รูปให้ ${it.spot} แล้ว`);ev.target.value='';uploadingItemId=null});
 $('#exportBtn').addEventListener('click',exportState);
 $('#modalRoot').addEventListener('click',ev=>{if(ev.target.id==='modalRoot')closeModal()});
 window.addEventListener('keydown',ev=>{if(ev.key==='Escape')closeModal()});
