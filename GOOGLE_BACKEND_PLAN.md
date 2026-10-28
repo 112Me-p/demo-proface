@@ -1,3 +1,5 @@
+> NOTE: This is an architectural proposal only, not a deployed/connected system.
+
 # PROFACE V7 — แผน Backend และ Google Integration (ยังไม่ติดตั้ง)
 
 ## ตัวตนและสิทธิ์
