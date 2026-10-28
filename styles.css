@@ -57,3 +57,39 @@ body.gate-open{overflow:hidden}
 @media print{.history-actions,.gate-inner,.approval-stage{display:none!important}.offset-table .offset-inline{color:#333!important}}
 
 .revision-details{margin-top:10px;font-size:11px;color:#79678a;background:#faf7fc;border:1px solid #ede4f3;border-radius:10px;padding:10px}.revision-details summary{font-weight:700;cursor:pointer}.revision-details div{line-height:1.7;margin-top:6px}
+
+/* V7 Revision 02 — staff picker restored and review table / card switch */
+.review-panel-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end}
+.view-toggle{display:inline-flex;background:#f4effa;border:1px solid #e3d8f0;border-radius:11px;padding:4px;gap:3px}
+.view-toggle button{border:0;background:transparent;color:#756c80;border-radius:8px;padding:9px 13px;font-size:12px;font-family:inherit;font-weight:700;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.view-toggle button.active{background:white;color:#773fb4;box-shadow:0 1px 7px #3e2c5015}
+.view-toggle button:focus-visible,.profile-tile:focus-visible{outline:3px solid #ad86db;outline-offset:3px}
+.view-toggle .svg-icon{width:16px;height:16px}
+.review-layout-table{grid-template-columns:minmax(0,1fr)!important}
+.review-layout-table > div{min-width:0}
+.review-items-panel{min-width:0}
+.review-table-help{color:#8b8193;font-size:11px;margin:2px 0 12px}
+.review-table-scroll{width:100%;max-width:100%;overflow:auto;border:1px solid #ebe5f0;border-radius:12px;overscroll-behavior-x:contain;scrollbar-color:#b9a4d4 #f2edf7}
+.review-table-scroll:focus-visible{outline:2px solid #8150c4;outline-offset:2px}
+.review-data-table{border-collapse:separate;border-spacing:0;width:100%;min-width:1430px;font-size:11px;color:#3e3546;text-align:left}
+.review-data-table th{background:#f0e9f7;color:#5e4479;font-size:10px;font-weight:800;padding:13px 11px;white-space:nowrap;border-bottom:1px solid #e4d7ed;position:sticky;top:0;z-index:2}
+.review-data-table td{padding:13px 11px;vertical-align:top;line-height:1.8;border-bottom:1px solid #eeeaf2;background:#fff}
+.review-data-table tbody tr:nth-child(even) td{background:#fcfaff}
+.review-data-table tbody tr:hover td{background:#f7f1ff}
+.review-data-table tbody tr:last-child td{border-bottom:0}
+.review-data-table .sticky-col{position:sticky;left:0;z-index:3;min-width:57px;border-right:1px solid #ede5f3;text-align:center}
+.review-data-table th.sticky-col{z-index:4;background:#f0e9f7}
+.review-data-table .numeric{white-space:nowrap;text-align:center;font-variant-numeric:tabular-nums}
+.review-data-table .price-col,.review-data-table .price-cell{white-space:nowrap;text-align:right;font-weight:800}
+.review-data-table .price-cell{color:#713caa;font-size:13px}
+.table-muted{color:#95879d}
+.table-mini-status{display:inline-flex;padding:4px 7px;border-radius:8px;font-size:10px;white-space:nowrap;font-weight:700}
+.table-mini-status.table-ok{color:#268456;background:#ecf9f1}
+.table-mini-status.table-pending{color:#a46f1c;background:#fff5e3}
+.staff-login-required{width:min(100%,460px);margin:0 auto;text-align:center;background:#2a2436;border:1px solid #493b55;border-radius:20px;padding:32px 22px;display:flex;flex-direction:column;align-items:center;gap:14px}
+.staff-login-required strong{font-size:18px}.staff-login-required p{font-size:12px;color:#cabfd3;line-height:1.8;margin:0}
+.staff-login-required small{font-size:11px;color:#b6a5bd}
+.staff-lock{width:48px;height:48px;display:grid;place-items:center;background:#433450;border-radius:12px}
+.gate-logout{margin-left:10px;background:transparent;border:0;text-decoration:underline;color:#e3bffb;cursor:pointer;font-size:11px}
+@media(max-width:800px){.review-panel-head{align-items:flex-start!important;flex-direction:column;gap:12px}.review-panel-actions{width:100%;justify-content:space-between}.view-toggle button{padding:9px 11px}.review-layout-table .review-items-panel{padding:14px!important}}
+@media print{.view-toggle,.review-table-help{display:none!important}.review-table-scroll{overflow:visible}.review-data-table{min-width:0}}
