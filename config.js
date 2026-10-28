@@ -1,14 +1,15 @@
-// PROFACE Workflow V7 Revision 02 — local preview by default.
-// For real Google Sign-In: create Firebase Project, enable Google provider, authorize domain,
-// paste the public *web app* Firebase configuration below; change mode to "firebase".
-// Do not put private keys, OAuth client secret, or Drive refresh tokens in this file.
+// Public Firebase Web App metadata for PROFACE V8 pilot.
+// NEVER add service-account keys, OAuth client secrets or refresh tokens here.
 window.PROFACE_CONFIG = {
-  mode: "demo", // "demo" | "firebase"
-  firebase: {
-    apiKey: "",
-    authDomain: "",
-    projectId: "",
-    appId: "",
-    messagingSenderId: ""
-  }
+ mode: 'firebase',
+ firebase: {
+  apiKey: 'AIzaSyAKYENGTFcXMAAnpVQLm-97Z_4kTTm__6I',
+  authDomain: 'proface-workflow-v8.firebaseapp.com',
+  projectId: 'proface-workflow-v8',
+  storageBucket: 'proface-workflow-v8.firebasestorage.app',
+  messagingSenderId: '1019832284089',
+  appId: '1:1019832284089:web:1cc600878aaa8bb0defc68',
+  measurementId: 'G-H67L50MD7F'
+ }
 };
+// Authentication is real; project data remains in the current browser until the cloud backend is deployed.

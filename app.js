@@ -1,7 +1,7 @@
-/* PROFACE WORKFLOW STUDIO — V7 REVISION 01 (TEST + OPTIONAL VERIFIED GOOGLE SIGN-IN)
+/* PROFACE WORKFLOW STUDIO — V8 GOOGLE AUTHENTICATION PILOT
  * V7 profile picker + scoped workspace + storage-plan preview. V6 pricing retained.
  * "ทำราคา กิ๊ก .xlsx", sheet "ออนไลน์", four test cases rows 7-26.
- * No data ever leaves the browser: no server, Sheets, authentication or APIs.
+ * Firebase Auth verifies Google user identity. Business data stays in localStorage; Drive/Sheets pending.
  */
 (()=>{
 'use strict';
@@ -14,7 +14,12 @@ const uid=()=>`CW-${Date.now().toString(36).slice(-5).toUpperCase()}-${Math.floo
 // V2 deliberately starts empty. Previous demo sample projects are never loaded.
 const storageKey='proface-workflow-demo-v7-revision1'; // Preserve Revision 01 browser data
 const authConfig=window.PROFACE_CONFIG||{mode:'demo'};
-const GOOGLE_TEST_EMAIL='phonphotnuramrum@gmail.com';
+const GOOGLE_PILOT_PROFILES=Object.freeze({
+ 'natthinan.proface@gmail.com':'beam',
+ 'phonphotnuramrum@gmail.com':'creator'
+});
+const allowedProfileKey=()=>GOOGLE_PILOT_PROFILES[String(googleAuthUser?.email||'').trim().toLowerCase()]||null;
+let firebaseError='';
 let googleAuthUser=null;
 const salesOwners=["S'Beam","S'Tong","S'Gun","S'Bank",'Showroom'];
 const profiles=[
@@ -53,7 +58,7 @@ try {
 let route='home';let mode='single';let toastTimer=null;let uploadingItemId=null;let salesSearch='';
 const rvStored=localStorage.getItem('proface-v7-review-view');
 let reviewView=['cards','table'].includes(rvStored)?rvStored:(window.matchMedia('(max-width: 800px)').matches?'cards':'table');
-const auditActor=()=>googleAuthUser?.email?googleAuthUser.email+' (จำลองบทบาท '+profile.name+')':'Demo · '+(profile?.name||'Unknown');
+const auditActor=()=>googleAuthUser?.email?googleAuthUser.email:'Demo · '+(profile?.name||'Unknown');
 function save(){try{localStorage.setItem(storageKey,JSON.stringify(state));if(profile&&state.project){recentProjects[profile.key]=state.project.id;localStorage.setItem('proface-v7-recent',JSON.stringify(recentProjects))}return true}catch(e){toast('พื้นที่จัดเก็บของเบราว์เซอร์เต็ม กรุณาลดจำนวนรูปหรือ Export ข้อมูล');return false}}
 function toast(s){const t=$('#toast');t.textContent=s;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),3200)}
 function ico(name){const i={home:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',measure:'<path d="M3 18V6a2 2 0 0 1 2-2h13"/><path d="M7 7h10v10H7z"/><path d="M7 10h3m-3 3h2m5-6v3"/>',pricing:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 12h3m-3 4h3m5-4v4"/>',review:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M8.5 12l2 2 4.5-5"/>',order:'<path d="M7 3h9l4 4v14H7z"/><path d="M16 3v4h4M10 12h7m-7 4h7"/>',camera:'<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3"/>',check:'<path d="M4 12l5 5L20 6"/>',chevron:'<path d="M9 18l6-6-6-6"/>',plus:'<path d="M12 5v14m-7-7h14"/>',list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h1m-1 6h1m-1 6h1"/>',trend:'<path d="M3 17l6-6 4 4 8-9m-6 0h6v6"/>',shield:'<path d="M12 2l9 4v6c0 5-3.5 8-9 10-5.5-2-9-5-9-10V6z"/><path d="M8 12l3 3 5-5"/>',info:'<circle cx="12" cy="12" r="10"/><path d="M12 11v6m0-10h.01"/>'}[name]||'<circle cx="12" cy="12" r="9"/>';
@@ -245,33 +250,49 @@ function profileGate(){
  const gate=$('#profileGate');if(!gate)return;
  if(profile){gate.hidden=true;document.body.classList.remove('gate-open');return}
  document.body.classList.add('gate-open');gate.hidden=false;
- const live=authConfig.mode==='firebase';const eligible=!live||!!googleAuthUser;
+ const live=authConfig.mode==='firebase';const eligible=!live||!!allowedProfileKey();
+ const visibleProfiles=live?profiles.filter(p=>p.key===allowedProfileKey()):profiles;
  gate.innerHTML=`<div class="gate-inner"><div class="gate-brand"><span class="gate-logo">P<span>.</span></span><div>PROFACE <small>INTERNAL WORKFLOW</small></div><span class="gate-pill">${live?'GOOGLE PILOT':'STAFF DEMO'}</span></div>
- <div class="gate-head"><div class="eyebrow">STAFF PROFILES</div><h1>ใครกำลังใช้งาน?</h1><p>เลือกโปรไฟล์เพื่อทดสอบพื้นที่ทำงานของฝ่ายขาย แอดมิน และ Showroom</p></div>
- ${eligible?`<div class="profile-grid">${profiles.map(p=>`<button class="profile-tile" type="button" data-profile="${p.key}" title="จำลองบทบาท ${esc(p.name)}"><span class="profile-portrait" style="--profile-color:${p.color}"><span>${p.initial}</span></span><strong>${esc(p.name)}</strong><small>${p.role==='admin'?'Full Access':'Sales'}</small>${p.name==='Showroom'?`<span class="tiny-email">${p.key==='wachida'?'Wachida':'Chanapat'}</span>`:''}</button>`).join('')}</div>`:`<div class="staff-login-required"><div class="staff-lock">${ico('shield')}</div><strong>ยืนยันบัญชีผู้ทดสอบก่อนเลือกโปรไฟล์</strong><p>อนุญาตบัญชี ${GOOGLE_TEST_EMAIL} สำหรับทดสอบบทบาทพนักงานทั้งหมด</p><button class="btn btn-primary gate-signin" type="button" data-action="google-login" ${!firebaseAuth?'disabled':''}>เข้าสู่ระบบด้วย Google</button><small>${!firebaseAuth?'โปรดตั้งค่า Firebase และโดเมนที่อนุญาตใน config.js ก่อน':''}</small></div>`}
- <div class="gate-caption">${live&&eligible?`ยืนยันบัญชี ${esc(googleAuthUser?.email||'')} แล้ว · <b>การเลือก Staff เป็นการจำลองบทบาทสำหรับทดสอบ</b> <button type="button" class="gate-logout" data-action="google-logout">ออกจากบัญชี Google</button>`:live?'ยังไม่เชื่อม Google Drive/Sheets · การล็อกอิน Google ต้องตั้งค่า Firebase ก่อน':'โปรไฟล์ทั้งหมดเป็นเพียง <b>โหมดจำลองสำหรับทดสอบในเบราว์เซอร์เครื่องนี้</b> ไม่ใช่การยืนยันตัวตนพนักงานจริง · ยังไม่ซิงก์ Google Drive/Sheets'}</div></div>`;
+ <div class="gate-head"><div class="eyebrow">STAFF PROFILES</div><h1>เข้าสู่พื้นที่ทำงาน</h1><p>${live?'เข้าสู่ระบบด้วย Google ก่อนเลือกโปรไฟล์ที่ได้รับอนุญาต':'เลือก Staff สำหรับทดสอบพื้นที่ทำงาน'}</p></div>
+ ${eligible?`<div class="profile-grid">${visibleProfiles.map(p=>`<button class="profile-tile" type="button" data-profile="${p.key}" title="เข้าสู่โปรไฟล์ ${esc(p.name)}"><span class="profile-portrait" style="--profile-color:${p.color}"><span>${p.initial}</span></span><strong>${esc(p.name)}</strong><small>${p.role==='admin'?'Full Access':'Sales'}</small>${p.name==='Showroom'?`<span class="tiny-email">${p.key==='wachida'?'Wachida':'Chanapat'}</span>`:''}</button>`).join('')}</div>`:`<div class="staff-login-required"><div class="staff-lock">${ico('shield')}</div><strong>เข้าสู่ระบบ PROFACE ด้วย Google</strong><p>บัญชีที่เปิดให้ทดลอง: S'Beam และ System Admin เท่านั้น</p><button class="btn btn-primary gate-signin" type="button" data-action="google-login" ${!firebaseAuth?'disabled':''}>เข้าสู่ระบบด้วย Google</button><small>${firebaseError?esc(firebaseError):(!firebaseAuth?'กำลังโหลดระบบ Google Authentication…':'ใช้บัญชี Google ของ PROFACE ที่ได้รับอนุญาต')}</small></div>`}
+ <div class="gate-caption">${live&&eligible?`ยืนยันบัญชี ${esc(googleAuthUser?.email||'')} แล้ว · <b>สามารถเข้าได้เฉพาะโปรไฟล์ที่ผูกกับอีเมลนี้</b> <button type="button" class="gate-logout" data-action="google-logout">ออกจากบัญชี Google</button>`:live?'Google Login ทำงานจริง · โปรเจกต์ยังเก็บเฉพาะบนเบราว์เซอร์เครื่องนี้':'โปรไฟล์ทั้งหมดเป็นเพียง <b>โหมดจำลองสำหรับทดสอบในเบราว์เซอร์เครื่องนี้</b> ไม่ใช่การยืนยันตัวตนพนักงานจริง · ยังไม่ซิงก์ Google Drive/Sheets'}</div></div>`;
 }
 let firebaseAuth=null;
 async function loadFirebase(){const load=url=>new Promise((resolve,reject)=>{const sc=document.createElement('script');sc.src=url;sc.onload=resolve;sc.onerror=reject;document.head.append(sc)});
  try{if(!authConfig.firebase?.apiKey||!authConfig.firebase?.projectId)throw Error('ยังไม่ได้กรอก Firebase Configuration ใน config.js');
  await load('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');await load('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js');
  firebase.initializeApp(authConfig.firebase);firebaseAuth=firebase.auth();
+ await firebaseAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
  firebaseAuth.onAuthStateChanged(user=>{
-   if(user&&user.email?.toLowerCase()===GOOGLE_TEST_EMAIL&&user.emailVerified&&user.providerData?.some(p=>p.providerId==='google.com')){googleAuthUser=user;render();}
-   else{googleAuthUser=null;profile=null;sessionStorage.removeItem(profileKey);render();if(user){firebaseAuth.signOut();toast('อีเมลนี้ยังไม่ได้รับสิทธิ์ทดสอบระบบ')}}
- });render();
- }catch(err){render();toast('ยังเปิด Google Sign-In ไม่ได้: '+err.message)}
+   const mail=String(user?.email||'').trim().toLowerCase();
+   const authorized=!!GOOGLE_PILOT_PROFILES[mail] && !!user?.emailVerified &&
+     !!user?.providerData?.some(p=>p.providerId==='google.com');
+   if(authorized){
+     if(googleAuthUser?.uid!==user.uid || (profile && profile.key!==GOOGLE_PILOT_PROFILES[mail])){
+       profile=null;sessionStorage.removeItem(profileKey);route='home';
+     }
+     googleAuthUser=user;firebaseError='';render();
+   }else{
+     googleAuthUser=null;profile=null;sessionStorage.removeItem(profileKey);route='home';render();
+     if(user)firebaseAuth.signOut().catch(()=>{}).finally(()=>toast('บัญชีนี้ยังไม่ได้รับอนุญาตให้ใช้ PROFACE V8'));
+   }
+ },err=>{
+   googleAuthUser=null;profile=null;sessionStorage.removeItem(profileKey);
+   firebaseError='อ่านสถานะการเข้าสู่ระบบไม่สำเร็จ: '+err.message;render();
+ });
+ render();
+ }catch(err){firebaseError='เปิด Firebase ไม่สำเร็จ: '+err.message;render();toast(firebaseError)}
 }
 async function signInGoogle(){if(!firebaseAuth)return toast('ตั้งค่า Firebase และเปิดเว็บผ่าน HTTPS ก่อน');try{await firebaseAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider())}catch(err){toast('ไม่สามารถเข้าสู่ระบบ Google: '+(err.code||err.message))}}
 function chooseProfile(key){
- if(authConfig.mode==='firebase'&&!googleAuthUser)return;
+ if(authConfig.mode==='firebase'&&key!==allowedProfileKey()){toast('คุณไม่มีสิทธิ์เลือกโปรไฟล์นี้');return;}
  const chosen=profiles.find(x=>x.key===key);if(!chosen)return;
  if(state.project){const snap=activeSnapshot();if(snap && !state.archive.some(x=>x.project.id===snap.project.id))state.archive.push(snap);Object.assign(state,{project:null,items:[],extras:[],status:'draft',events:[],quote:{},priceApproval:null})}
  profile=chosen;salesFilter=isAdmin()?'all':chosen.owner;
  sessionStorage.setItem(profileKey,key);
  const last=recentProjects[key];const rec=last?state.archive.find(x=>x.project?.id===last):null;
  if(rec && accessible(rec)){const idx=state.archive.indexOf(rec);state.archive.splice(idx,1);Object.assign(state,{project:rec.project,items:rec.items,extras:rec.extras,status:rec.status,events:rec.events,quote:rec.quote||{},priceApproval:rec.priceApproval||null})}
- save();route='home';render();toast('เข้าสู่พื้นที่ทำงาน '+chosen.name+' · Demo');
+ save();route='home';render();toast('เข้าสู่พื้นที่ทำงาน '+chosen.name+(authConfig.mode==='firebase'?' · ยืนยัน Google แล้ว':' · Demo'));
 }
 function leaveProfile(){if(profile&&state.project){recentProjects[profile.key]=state.project.id;localStorage.setItem('proface-v7-recent',JSON.stringify(recentProjects))}
  profile=null;sessionStorage.removeItem(profileKey);route='home';render();}
@@ -282,12 +303,12 @@ function workspaceStoragePanel(){if(!state.project)return '';
  <div class="cloud-layout"><div class="cloud-tree"><div class="folder-strong">📁 PROFACE WORKFLOW DATA</div><div class="folder-child">📁 ${esc(p.sales)}</div><div class="folder-child inner">📂 ${esc(p.id)} · ${esc(p.name)}</div><div class="folder-child deeper">📊 ${esc(p.id)} — Project_Data</div><div class="folder-child deeper">📁 Site_Photos</div><div class="folder-child deeper">📁 Documents</div></div>
  <div class="cloud-right"><div class="cloud-mini-head">Google Sheets · ตารางข้อมูลที่จะจัดเก็บ</div>${files.map(f=>`<span class="sheet-pill">${f}</span>`).join('')}<div class="sheet-preview-wrap"><table class="sheet-preview"><thead><tr><th>จุด</th><th>ประเภทม่าน</th><th>ขนาด (ม.)</th><th>รูป</th></tr></thead><tbody>${state.items.length?state.items.slice(0,4).map((it,i)=>`<tr><td>${esc(it.spot)}</td><td>${esc(curtainLabel(it.type))}</td><td>${money(it.width,2)} × ${money(it.height,2)}</td><td>${it.photos?.length||0}</td></tr>`).join(''):`<tr><td colspan="4" class="preview-empty">ข้อมูลจะปรากฏเมื่อบันทึกการวัดชุดแรก</td></tr>`}</tbody></table></div><button class="btn btn-soft" data-action="export-csv">⇩ ส่งออกตาราง CSV ทดลอง</button></div></div><p class="cloud-footnote">ข้อมูลจริงตอนนี้ถูกบันทึกใน LocalStorage เครื่องนี้เท่านั้น · ยังไม่มีการสร้างโฟลเดอร์หรือ Google Sheets ออนไลน์</p></section>`;
 }
-function roleNotice(){return profile&&!isAdmin()&&route==='pricing'?`<div class="notice" style="margin-bottom:16px">🔒 โปรไฟล์ฝ่ายขายสามารถดูสถานะการทำราคาได้ แต่การแก้ราคาเป็นหน้าที่ Admin/Showroom/S'Gun ใน Demo ให้สลับโปรไฟล์เพื่อทดลองการทำราคา</div>`:''}
+function roleNotice(){return (authConfig.mode==='firebase'?`<div class="notice" style="margin-bottom:16px">✓ เข้าสู่ระบบด้วย Google: ${esc(googleAuthUser?.email||'')} · V8 Login Pilot — ข้อมูลโปรเจกต์ยังบันทึกเฉพาะในเบราว์เซอร์ ไม่ได้ซิงก์ Google Drive/Sheets</div>`:'')+(profile&&!isAdmin()&&route==='pricing'?`<div class="notice" style="margin-bottom:16px">🔒 ฝ่ายขายดูสถานะราคาได้ แต่แก้ราคาและอนุมัติราคาได้เฉพาะ Admin</div>`:'')}
 function workspaceHeader(){const p=state.project;const bar=$('#workspaceRibbon');if(!bar)return;
- bar.innerHTML=profile?`<div class="workspace-ribbon"><div class="ribbon-identity"><span class="ribbon-dot"></span><strong>${p?esc(p.id)+' · '+esc(p.name):'MY WORKSPACE · '+esc(profile.name)}</strong><small>${p?`เจ้าของงาน ${esc(p.sales)} · ${state.items.length} ชุด`:`${esc(profile.email)} · ยังไม่ได้เปิดโปรเจกต์`}</small></div><div class="ribbon-actions">${p?`<span class="chip-status">${state.status==='confirmed'?'ยืนยันแล้ว':'กำลังดำเนินการ'}</span>`:''}<button class="ribbon-switch" data-action="switch-profile">⇄ เปลี่ยน Staff</button></div></div>`:'';
+ bar.innerHTML=profile?`<div class="workspace-ribbon"><div class="ribbon-identity"><span class="ribbon-dot"></span><strong>${p?esc(p.id)+' · '+esc(p.name):'MY WORKSPACE · '+esc(profile.name)}</strong><small>${p?`เจ้าของงาน ${esc(p.sales)} · ${state.items.length} ชุด`:`${esc(profile.email)} · ยังไม่ได้เปิดโปรเจกต์`}</small></div><div class="ribbon-actions">${p?`<span class="chip-status">${state.status==='confirmed'?'ยืนยันแล้ว':'กำลังดำเนินการ'}</span>`:''}<button class="ribbon-switch" data-action="switch-profile">⇄ เปลี่ยน Staff</button>${authConfig.mode==='firebase'?`<button class="ribbon-switch" data-action="google-logout">ออกจาก Google</button>`:''}</div></div>`:'';
  const f=$('.side-footer');if(f)f.innerHTML=profile?`<span class="avatar">${esc(profile.initial)}</span><span><strong>${esc(profile.name)}</strong><small>${esc(profile.role==='admin'?'Full Access':'Sales · Personal')}</small></span><span class="online"></span>`:'';
 }
-function render(){profileGate();if(!profile)return;
+function render(){profileGate();if(!profile){$('#content').innerHTML='';$('#workspaceRibbon').innerHTML='';return;}
  nav();workspaceHeader();document.body.dataset.printDoc=route==='quote'?'quote':'order';
  let content=({home,measure,pricing,review,order,quote,sales})[route]();
  if(route==='home'&&state.project)content+=workspaceStoragePanel();
@@ -323,7 +344,7 @@ function resizeDataURL(file,max=720){return new Promise((resolve,reject)=>{const
 document.addEventListener('click',ev=>{const button=ev.target.closest('button');if(!button)return;
 if(button.dataset.action==='demo-login'&&authConfig.mode==='demo'){chooseProfile('creator');return}
 if(button.dataset.action==='google-login'){signInGoogle();return}
-if(button.dataset.action==='google-logout'&&authConfig.mode==='firebase'){firebaseAuth?.signOut();googleAuthUser=null;profile=null;render();return}
+if(button.dataset.action==='google-logout'&&authConfig.mode==='firebase'){profile=null;googleAuthUser=null;sessionStorage.removeItem(profileKey);route='home';render();firebaseAuth?.signOut().catch(err=>toast('ออกจากระบบไม่สำเร็จ: '+err.message));return}
 if(button.dataset.profile){chooseProfile(button.dataset.profile);return;}
 if(!profile)return;
 if(button.dataset.nav){goto(button.dataset.nav);return}
