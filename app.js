@@ -175,6 +175,12 @@ let route='home';let mode='single';let toastTimer=null;let uploadingItemId=null;
 const rvStored=localStorage.getItem('proface-v7-review-view');
 let reviewView=['cards','table'].includes(rvStored)?rvStored:(window.matchMedia('(max-width: 800px)').matches?'cards':'table');
 const auditActor=()=>googleAuthUser?.email?googleAuthUser.email:'Demo · '+(profile?.name||'Unknown');
+function cacheViewOnly(){
+  // Switching profiles or opening a project is a READ operation, not an edit.
+  // Never PUT a possibly stale snapshot back to D1 just by viewing it.
+  try{localStorage.setItem(storageKey,JSON.stringify(state));return true}
+  catch(e){toast('ไม่สามารถบันทึกสถานะหน้าจอในอุปกรณ์นี้ได้');return false}
+}
 function save(){try{localStorage.setItem(storageKey,JSON.stringify(state));if(profile&&state.project){recentProjects[profile.key]=state.project.id;localStorage.setItem('proface-v10-recent',JSON.stringify(recentProjects))}if(cloudEnabled()&&state.project&&cloudReady){cloudDirty=true;cloudWriteGeneration++;}scheduleCloudSave();return true}catch(e){toast('พื้นที่จัดเก็บของเบราว์เซอร์เต็ม กรุณาลดจำนวนรูปหรือ Export ข้อมูล');return false}}
 function toast(s){const t=$('#toast');t.textContent=s;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),3200)}
 function ico(name){const i={home:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',measure:'<path d="M3 18V6a2 2 0 0 1 2-2h13"/><path d="M7 7h10v10H7z"/><path d="M7 10h3m-3 3h2m5-6v3"/>',pricing:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 12h3m-3 4h3m5-4v4"/>',review:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4.5V3h6v1.5M8.5 12l2 2 4.5-5"/>',order:'<path d="M7 3h9l4 4v14H7z"/><path d="M16 3v4h4M10 12h7m-7 4h7"/>',camera:'<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3"/>',check:'<path d="M4 12l5 5L20 6"/>',chevron:'<path d="M9 18l6-6-6-6"/>',plus:'<path d="M12 5v14m-7-7h14"/>',list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h1m-1 6h1m-1 6h1"/>',trend:'<path d="M3 17l6-6 4 4 8-9m-6 0h6v6"/>',shield:'<path d="M12 2l9 4v6c0 5-3.5 8-9 10-5.5-2-9-5-9-10V6z"/><path d="M8 12l3 3 5-5"/>',info:'<circle cx="12" cy="12" r="10"/><path d="M12 11v6m0-10h.01"/>'}[name]||'<circle cx="12" cy="12" r="9"/>';
@@ -249,7 +255,7 @@ function switchProject(id){
  const idx=state.archive.findIndex(x=>x.project?.id===id);if(idx<0)return;
  const chosen=state.archive.splice(idx,1)[0];const current=activeSnapshot();if(current)state.archive.push(current);
  Object.assign(state,{project:chosen.project,items:chosen.items,extras:chosen.extras,status:chosen.status,events:chosen.events,quote:chosen.quote||{},priceApproval:chosen.priceApproval||null});
- save();goto('home');if(cloudEnabled())cloudHydratePhotos();toast('เปิดโปรเจกต์ '+state.project.id+' แล้ว');
+  cacheViewOnly();goto('home');if(cloudEnabled())cloudHydratePhotos();toast('เปิดโปรเจกต์ '+state.project.id+' แล้ว');
 }
 function exportCSV(){
  const q=x=>'"'+String(x??'').replace(/"/g,'""')+'"';
@@ -309,8 +315,8 @@ function measure(){const uniqueRooms=[...new Set(state.items.map(v=>`${v.floor} 
 <div class="hint" style="margin-top:8px">กรณีกรอกหลายชุดพร้อมกัน ภาพชุดนี้จะอยู่กับรายการแรก และสามารถแนบรูปเฉพาะชุดอื่นเพิ่มได้หลังบันทึก</div>
 <div class="form-actions"><button type="submit" class="btn btn-primary" style="flex:1">${ico('plus')} บันทึกและไปจุดถัดไป</button><button type="button" class="btn btn-light" data-action="reset-form">ล้างฟอร์ม</button></div>
 </form></div><div class="notice">${ico('camera')} หลังบันทึกแล้ว กด <b>แนบรูป</b> ในรายการด้านข้างเพื่อเลือกภาพหรือเปิดกล้องมือถือ รูปจะอยู่กับชุดม่านนั้นโดยเฉพาะ</div></div>
-<div><div class="panel" style="padding:19px"><div class="panel-head"><div><h3>รายการที่วัดแล้ว</h3><p class="panel-desc">${state.items.length} ชุด · ${uniqueRooms.length} ห้อง/โซน</p></div><span class="tag tag-green">บันทึกในเบราว์เซอร์</span></div>
-<div id="measurementList">${state.items.length?state.items.map(it=>measureCard(it)).join(''):'<div class="empty"><div class="empty-icon">▧</div><strong>ยังไม่มีจุดที่วัด</strong><p>กรอกขนาดทางซ้าย แล้วบันทึกเป็นรายการแรก</p></div>'}</div><div class="form-actions"><button class="btn btn-primary" data-nav="pricing" style="flex:1" ${!state.items.length?'disabled':''}>ส่งต่อแอดมินทำราคา →</button></div></div></div></div>`}
+<div><div class="panel" style="padding:19px"><div class="panel-head"><div><h3>รายการที่วัดแล้ว</h3><p class="panel-desc">${state.items.length} ชุด · ${uniqueRooms.length} ห้อง/โซน</p></div><span class="tag ${cloudDirty||cloudSaving?'tag-warn':'tag-green'}">${cloudEnabled()?(cloudSaving?'กำลังบันทึก D1':cloudDirty?'รอบันทึก D1':'บันทึก D1 แล้ว'):'บันทึกในเบราว์เซอร์'}</span></div>
+<div id="measurementList">${state.items.length?state.items.map(it=>measureCard(it)).join(''):'<div class="empty"><div class="empty-icon">▧</div><strong>ยังไม่มีจุดที่วัด</strong><p>กรอกขนาดทางซ้าย แล้วบันทึกเป็นรายการแรก</p></div>'}</div><div class="form-actions"><button class="btn btn-primary" data-action="submit-measurements" style="flex:1" ${!state.items.length?'disabled':''}>ส่งต่อแอดมินทำราคา →</button></div></div></div></div>`}
 function measureCard(it){return `<article class="list-card"><div class="list-card-head"><div><div class="list-meta">${esc(it.floor)} · ${esc(it.room)}</div><h4>${esc(it.spot)} · ${esc(it.type==='wave'?'ม่านลอน':it.type==='pleated'?'ม่านจีบ':it.type==='eyelet'?'ม่านตาไก่':it.type==='roller'?'ม่านม้วน':it.type==='wood'?'มู่ลี่ไม้':'งานอื่น')}</h4><p><b>${money(it.width,2)} × ${money(it.height,3)} ม.</b> · ${esc(it.open)} · ${esc(it.fabric)}</p>${offsetsHtml(it,true)}${it.notes?`<p>${esc(it.notes)}</p>`:''}</div><span class="tag ${activeCurtains.has(it.type)?'tag-green':'tag-warn'}">${activeCurtains.has(it.type)?(areaCurtains.has(it.type)?'พร้อมกรอกราคา/หน่วย':'พร้อมเลือกสูตรผ้า'):'ยังไม่เปิดสูตร'}</span></div><div class="thumbnail-row">${(it.photos||[]).map((p,i)=>`<img class="thumb" src="${p}" title="ภาพ ${i+1}" alt="รูปหน้างานชุดนี้"/>`).join('')}${!it.photos?.length?'<div class="thumb-placeholder">▧</div>':''}</div><div class="list-card-actions"><button class="small-action" data-photo="${esc(it.id)}">${ico('camera')} แนบรูป (${(it.photos||[]).length})</button><button class="small-action" data-duplicate="${esc(it.id)}">${ico('plus')} คัดลอก</button><button class="small-action" data-edit="${esc(it.id)}">แก้ไข</button><button class="small-action" data-delete="${esc(it.id)}">ลบชุดนี้</button></div></article>`}
 function priceCard(it){const c=calc(it),isArea=areaCurtains.has(it.type);return `<article class="price-item"><div class="price-item-inner"><div class="price-heading"><div><strong>${esc(it.room)} · ${esc(it.spot)}</strong><div class="curtain-tag">${esc(curtainLabel(it.type))}</div><small>${esc(it.fabric)} · ${money(it.width,2)} × ${money(it.height,3)} ม. · ${esc(it.open)}</small></div><span class="tag ${c.valid?'tag-green':'tag-warn'}">${c.valid?'คำนวณได้':'รอตรวจสอบ'}</span></div>
 <div class="field" style="margin-bottom:11px"><label>รหัสผ้า / รหัสสินค้า (แอดมินตรวจสอบ)</label><input data-fabric="${esc(it.id)}" value="${esc(it.fabric||'')}" placeholder="พิมพ์รหัสสินค้าจริง" /></div>
@@ -417,7 +423,7 @@ function chooseProfile(key){
  sessionStorage.setItem(profileKey,key);
  const last=recentProjects[key];const rec=last?state.archive.find(x=>x.project?.id===last):null;
  if(rec && accessible(rec)){const idx=state.archive.indexOf(rec);state.archive.splice(idx,1);Object.assign(state,{project:rec.project,items:rec.items,extras:rec.extras,status:rec.status,events:rec.events,quote:rec.quote||{},priceApproval:rec.priceApproval||null})}
- save();route='home';render();if(cloudEnabled()&&state.project)cloudHydratePhotos();toast('เข้าสู่พื้นที่ทำงาน '+chosen.name+(authConfig.mode==='firebase'?' · ยืนยัน Google แล้ว':' · Demo'));
+  cacheViewOnly();route='home';render();if(cloudEnabled()&&state.project)cloudHydratePhotos();toast('เข้าสู่พื้นที่ทำงาน '+chosen.name+(authConfig.mode==='firebase'?' · ยืนยัน Google แล้ว':' · Demo'));
 }
 function leaveProfile(){if(profile&&state.project){recentProjects[profile.key]=state.project.id;localStorage.setItem('proface-v10-recent',JSON.stringify(recentProjects))}
  profile=null;sessionStorage.removeItem(profileKey);route='home';render();}
@@ -454,6 +460,25 @@ function render(){profileGate();if(!profile){$('#content').innerHTML='';$('#work
 }
 function goto(p){if(!profile)return;if(!sections.some(x=>x[0]===p))return;if(!state.project&&p!=='home'&&p!=='sales'){route='home';render();toast('สร้างโปรเจกต์ใหม่ก่อนเริ่มกรอกขนาด');$('#projectSetup')?.scrollIntoView({behavior:'smooth',block:'start'});return}route=p;render();window.scrollTo({top:0,behavior:'smooth'})}
 function updateModeUi(){const input=$('input[name="widths"]');if(!input)return;$$('#modeSwitch button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));$('#widthLabel').textContent=mode==='multi'?'ความกว้างหลายชุด (เมตร)':'ความกว้าง (เมตร)';$('#multiHelp').textContent=mode==='multi'?'ตัวอย่าง 1.67, 1.66, 1.66, 1.66, 0.72 → จะสร้าง 5 ชุดแยกกัน แต่สูงเท่ากัน':'1 ชุด = 1 ความกว้าง × 1 ความสูง';input.placeholder=mode==='multi'?'1.67, 1.66, 1.66, 1.66, 0.72':'1.24'}
+async function submitMeasurementToAdmin(){
+  if(!state.project||!state.items.length){toast('กรุณาบันทึกขนาดม่านก่อนส่งต่อแอดมิน');return;}
+  if(!cloudEnabled()){goto('pricing');return;}
+  if(!cloudReady){toast('ยังเชื่อม D1 ไม่สำเร็จ กรุณาตรวจสอบ Cloud ก่อนส่ง');return;}
+  if(cloudSaving){toast('ระบบกำลังบันทึก D1 กรุณารอการบันทึกให้เสร็จ แล้วกดส่งต่ออีกครั้ง');return;}
+  // This is now an explicit server-side handoff, not a page navigation.
+  const previousStatus=state.status;
+  state.status='submitted';
+  log('ฝ่ายขายส่งขนาด '+state.items.length+' ชุดให้แอดมินทำราคา');
+  save();
+  clearTimeout(cloudTimer);
+  await cloudPersist();
+  if(cloudDirty||cloudSaving||cloudNeedsResave){
+    toast('ส่งต่อยังไม่สำเร็จ: D1 ยังไม่ยืนยันการบันทึก โปรดแก้ปัญหาและลองอีกครั้ง');
+    return;
+  }
+  goto('pricing');
+  toast('ส่งข้อมูล '+state.items.length+' ชุดให้แอดมินเรียบร้อย · D1 บันทึกสำเร็จ');
+}
 function resetForm(){const f=$('#surveyForm');if(f)f.reset();toast('ล้างช่องกรอกแล้ว')}
 function readOffset(v){return v===null||String(v).trim()===''?null:Math.max(0,Number(v))}
 async function addFromSurvey(form){const fd=new FormData(form);const val=String(fd.get('widths')||'').trim();const ws=(mode==='multi'?val.split(/[,，;\s]+/):[val]).filter(Boolean).map(v=>Number(v));const h=Number(fd.get('height'));if(!ws.length||ws.some(w=>!(w>0))||!(h>0)){toast('กรุณากรอกความกว้างและความสูงให้ถูกต้อง');return}
@@ -494,6 +519,7 @@ if(button.dataset.photo){uploadingItemId=button.dataset.photo;$('#photoInput').c
 if(button.dataset.delExtra!==undefined){state.extras.splice(Number(button.dataset.delExtra),1);markChanged('ลบค่าบริการ');save();render();toast('ลบค่าใช้จ่ายแล้ว');return}
 const act=button.dataset.action;
 if(act==='switch-profile'){if(!cloudCanLeave())return;leaveProfile();return}
+if(act==='submit-measurements'){submitMeasurementToAdmin();return}
 if(act==='cloud-refresh'){cloudBootstrap();return}
 if(act==='cloud-retry'){if(state.project)cloudRequest('/api/projects/'+encodeURIComponent(state.project.id)+'/sync',{method:'POST'}).then(r=>{state.project.cloudState=r.project.syncState;state.project.cloudDriveId=r.project.driveFolderId;state.project.cloudSheetId=r.project.sheetsFileId;render();toast(r.sync.ok?'Google Drive/Sheets ซิงก์สำเร็จ':'ยังซิงก์ไม่สำเร็จ: '+r.sync.error)}).catch(e=>toast(e.message));return}
 if(act==='cloud-connect'){if(!confirm('คำเตือน: Backend รุ่นทดสอบยังขอสิทธิ์จัดการ Google Drive ทั้งบัญชีบริษัท\n\nควรตรวจขอบเขตสิทธิ์และหน้า Privacy Policy ก่อนอนุญาต\n\nต้องการเปิดหน้าขออนุญาต Google จริงหรือไม่?'))return;cloudRequest('/api/google/connect',{method:'POST'}).then(r=>location.assign(r.url)).catch(e=>toast(e.message));return}
