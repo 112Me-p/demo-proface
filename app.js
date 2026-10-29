@@ -94,35 +94,75 @@ async function cloudPersist(){
  finally{cloudSaving=false;render();if(cloudNeedsResave){cloudNeedsResave=false;clearTimeout(cloudTimer);cloudTimer=setTimeout(cloudPersist,800);}}
 }
 function scheduleCloudSave(){if(!cloudEnabled()||!cloudReady||!state.project||cloudSuspended)return;if(cloudSaving){cloudNeedsResave=true;return;}clearTimeout(cloudTimer);cloudTimer=setTimeout(cloudPersist,900)}
-async function cloudHydratePhotos(){
- if(!cloudEnabled()||!cloudReady||!state.project)return;
- const projectId=state.project.id;
- try{
-   const {photos}=await cloudRequest('/api/projects/'+encodeURIComponent(projectId)+'/photos');
-   const token=await googleAuthUser.getIdToken();
-   const byItem=new Map();for(const p of photos||[]){const list=byItem.get(p.itemId)||[];list.push(p);byItem.set(p.itemId,list)}
-   for(const it of state.items){
-     const entries=byItem.get(it.id)||[];
-     const photos=it.photos||(it.photos=[]);
-     if(photos.length>=entries.length)continue; // don't duplicate pictures kept locally
-     for(const a of entries.slice(photos.length)){
-       const res=await fetch(apiBase+'/api/projects/'+encodeURIComponent(projectId)+'/photos/'+encodeURIComponent(a.photoId),{headers:{Authorization:'Bearer '+token}});
-       if(!res.ok)throw new Error('ดึงรูปภาพจาก Drive ไม่สำเร็จ: '+res.status);
-       const blob=await res.blob();
-       const dataURL=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob)});
-       photos.push(dataURL);
-     }
-   }
-   if(state.project?.id===projectId)render();
- }catch(e){toast('มีภาพบางส่วนที่ยังโหลดจาก Google Drive ไม่สำเร็จ: '+e.message)}
+// Photos live in Drive, not in D1 snapshot_json. Compare per-item counts before retrying
+// so a retry never blindly re-uploads the already recorded photos.
+let cloudPhotoBusy=false;
+async function cloudHydratePhotos({uploadMissing=false,notify=false}={}){
+  if(!cloudEnabled()||!cloudReady||!state.project)return false;
+  if(cloudPhotoBusy){if(notify)toast('กำลังซิงก์รูปอยู่ กรุณารอ');return false;}
+  if(uploadMissing&&(cloudDirty||cloudSaving||cloudNeedsResave)){
+    if(notify)toast('รอให้ข้อมูลม่านบันทึกใน D1 ก่อนซิงก์รูป');return false;
+  }
+  cloudPhotoBusy=true;
+  const projectId=state.project.id;
+  let uploaded=0,downloaded=0;
+  try{
+    const result=await cloudRequest('/api/projects/'+encodeURIComponent(projectId)+'/photos');
+    const byItem=new Map();
+    for(const p of result.photos||[]){const entries=byItem.get(p.itemId)||[];entries.push(p);byItem.set(p.itemId,entries)}
+    const token=await googleAuthUser.getIdToken();
+    for(const it of state.items){
+      if(state.project?.id!==projectId)throw new Error('โปรเจกต์เปลี่ยนระหว่างซิงก์รูป');
+      const records=byItem.get(it.id)||[];
+      const local=it.photos||(it.photos=[]);
+      if(uploadMissing && local.length>records.length){
+        // Old V10 had local images but never uploaded photos selected in the survey form.
+        // Only send the missing tail; do not re-upload the 3 confirmed Drive photos.
+        for(const dataURL of local.slice(records.length)){
+          if(typeof dataURL!=='string'||!/^data:image\/(?:jpeg|png|webp);base64,/.test(dataURL))
+            throw new Error('รูปบางรูปใน '+it.spot+' ไม่ใช่ไฟล์ภาพที่อัปโหลดได้');
+          const saved=await cloudUploadPhoto(it.id,dataURL);
+          records.push({photoId:saved.photoId,itemId:it.id});uploaded++;
+        }
+      }
+      // A different account (Admin) starts with no local images: fetch them from Drive.
+      for(const p of records.slice(local.length)){
+        const res=await fetch(apiBase+'/api/projects/'+encodeURIComponent(projectId)+'/photos/'+encodeURIComponent(p.photoId),{headers:{Authorization:'Bearer '+token}});
+        if(!res.ok)throw new Error('อ่านภาพของ '+it.spot+' จาก Drive ไม่สำเร็จ (HTTP '+res.status+')');
+        const blob=await res.blob();
+        const dataURL=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob)});
+        if(state.project?.id!==projectId)throw new Error('โปรเจกต์เปลี่ยนระหว่างโหลดรูป');
+        local.push(dataURL);downloaded++;
+      }
+    }
+    if(uploadMissing){
+      const check=await cloudRequest('/api/projects/'+encodeURIComponent(projectId)+'/photos');
+      const counts=new Map();for(const p of check.photos||[])counts.set(p.itemId,(counts.get(p.itemId)||0)+1);
+      const pending=state.items.filter(it=>(it.photos||[]).length>(counts.get(it.id)||0));
+      if(pending.length)throw new Error('รูปของ '+pending.map(x=>x.spot).join(', ')+' ยังบันทึกเข้า Drive ไม่ครบ');
+    }
+    if(state.project?.id===projectId){
+      render();
+      if(notify)toast(uploadMissing?'ซิงก์รูปสำเร็จ · อัปโหลดเพิ่ม '+uploaded+' · โหลดจาก Drive '+downloaded:'โหลดรูปจาก Drive สำเร็จ '+downloaded+' รูป');
+    }
+    return true;
+  }catch(e){cloudError='รูปภาพยังไม่ซิงก์ครบ: '+e.message;toast(cloudError);return false;}
+  finally{cloudPhotoBusy=false;}
 }
 async function cloudUploadPhoto(itemId,dataURL){
- if(!cloudEnabled()||!cloudReady||!state.project)return;
- try{
-   const parts=dataURL.split(',');const type=(parts[0].match(/data:([^;]+)/)||[])[1]||'image/jpeg';
-   const bytes=Uint8Array.from(atob(parts[1]),ch=>ch.charCodeAt(0));
-   await cloudRequest('/api/projects/'+encodeURIComponent(state.project.id)+'/photos?itemId='+encodeURIComponent(itemId),{method:'POST',body:new Blob([bytes],{type}),headers:{'content-type':type}});
- }catch(e){cloudError='ภาพบางรูปยังไม่เข้า Google Drive: '+e.message;toast(cloudError)}
+  if(!cloudEnabled()||!cloudReady||!state.project)throw new Error('Cloud ยังไม่พร้อมอัปโหลดรูป');
+  const parts=dataURL.split(',');const type=(parts[0].match(/data:([^;]+)/)||[])[1]||'image/jpeg';
+  const bytes=Uint8Array.from(atob(parts[1]),ch=>ch.charCodeAt(0));
+  return await cloudRequest('/api/projects/'+encodeURIComponent(state.project.id)+'/photos?itemId='+encodeURIComponent(itemId),{method:'POST',body:new Blob([bytes],{type}),headers:{'content-type':type}});
+}
+async function cloudFlushChanges(){
+  if(!cloudEnabled())return true;
+  for(let n=0;n<5;n++){
+    if(cloudSaving){await new Promise(resolve=>setTimeout(resolve,250));continue;}
+    if(cloudDirty||cloudNeedsResave){clearTimeout(cloudTimer);await cloudPersist();}
+    if(!cloudDirty&&!cloudSaving&&!cloudNeedsResave)return true;
+  }
+  return false;
 }
 
 const GOOGLE_PILOT_PROFILES=Object.freeze({
@@ -316,7 +356,7 @@ function measure(){const uniqueRooms=[...new Set(state.items.map(v=>`${v.floor} 
 <div class="form-actions"><button type="submit" class="btn btn-primary" style="flex:1">${ico('plus')} บันทึกและไปจุดถัดไป</button><button type="button" class="btn btn-light" data-action="reset-form">ล้างฟอร์ม</button></div>
 </form></div><div class="notice">${ico('camera')} หลังบันทึกแล้ว กด <b>แนบรูป</b> ในรายการด้านข้างเพื่อเลือกภาพหรือเปิดกล้องมือถือ รูปจะอยู่กับชุดม่านนั้นโดยเฉพาะ</div></div>
 <div><div class="panel" style="padding:19px"><div class="panel-head"><div><h3>รายการที่วัดแล้ว</h3><p class="panel-desc">${state.items.length} ชุด · ${uniqueRooms.length} ห้อง/โซน</p></div><span class="tag ${cloudDirty||cloudSaving?'tag-warn':'tag-green'}">${cloudEnabled()?(cloudSaving?'กำลังบันทึก D1':cloudDirty?'รอบันทึก D1':'บันทึก D1 แล้ว'):'บันทึกในเบราว์เซอร์'}</span></div>
-<div id="measurementList">${state.items.length?state.items.map(it=>measureCard(it)).join(''):'<div class="empty"><div class="empty-icon">▧</div><strong>ยังไม่มีจุดที่วัด</strong><p>กรอกขนาดทางซ้าย แล้วบันทึกเป็นรายการแรก</p></div>'}</div><div class="form-actions"><button class="btn btn-primary" data-action="submit-measurements" style="flex:1" ${!state.items.length?'disabled':''}>ส่งต่อแอดมินทำราคา →</button></div></div></div></div>`}
+<div id="measurementList">${state.items.length?state.items.map(it=>measureCard(it)).join(''):'<div class="empty"><div class="empty-icon">▧</div><strong>ยังไม่มีจุดที่วัด</strong><p>กรอกขนาดทางซ้าย แล้วบันทึกเป็นรายการแรก</p></div>'}</div><div class="form-actions">${cloudEnabled()?'<button type="button" class="btn btn-light" data-action="cloud-photos">ซิงก์/โหลดรูปจาก Drive</button>':''}<button class="btn btn-primary" data-action="submit-measurements" style="flex:1" ${!state.items.length?'disabled':''}>ส่งต่อแอดมินทำราคา →</button></div></div></div></div>`}
 function measureCard(it){return `<article class="list-card"><div class="list-card-head"><div><div class="list-meta">${esc(it.floor)} · ${esc(it.room)}</div><h4>${esc(it.spot)} · ${esc(it.type==='wave'?'ม่านลอน':it.type==='pleated'?'ม่านจีบ':it.type==='eyelet'?'ม่านตาไก่':it.type==='roller'?'ม่านม้วน':it.type==='wood'?'มู่ลี่ไม้':'งานอื่น')}</h4><p><b>${money(it.width,2)} × ${money(it.height,3)} ม.</b> · ${esc(it.open)} · ${esc(it.fabric)}</p>${offsetsHtml(it,true)}${it.notes?`<p>${esc(it.notes)}</p>`:''}</div><span class="tag ${activeCurtains.has(it.type)?'tag-green':'tag-warn'}">${activeCurtains.has(it.type)?(areaCurtains.has(it.type)?'พร้อมกรอกราคา/หน่วย':'พร้อมเลือกสูตรผ้า'):'ยังไม่เปิดสูตร'}</span></div><div class="thumbnail-row">${(it.photos||[]).map((p,i)=>`<img class="thumb" src="${p}" title="ภาพ ${i+1}" alt="รูปหน้างานชุดนี้"/>`).join('')}${!it.photos?.length?'<div class="thumb-placeholder">▧</div>':''}</div><div class="list-card-actions"><button class="small-action" data-photo="${esc(it.id)}">${ico('camera')} แนบรูป (${(it.photos||[]).length})</button><button class="small-action" data-duplicate="${esc(it.id)}">${ico('plus')} คัดลอก</button><button class="small-action" data-edit="${esc(it.id)}">แก้ไข</button><button class="small-action" data-delete="${esc(it.id)}">ลบชุดนี้</button></div></article>`}
 function priceCard(it){const c=calc(it),isArea=areaCurtains.has(it.type);return `<article class="price-item"><div class="price-item-inner"><div class="price-heading"><div><strong>${esc(it.room)} · ${esc(it.spot)}</strong><div class="curtain-tag">${esc(curtainLabel(it.type))}</div><small>${esc(it.fabric)} · ${money(it.width,2)} × ${money(it.height,3)} ม. · ${esc(it.open)}</small></div><span class="tag ${c.valid?'tag-green':'tag-warn'}">${c.valid?'คำนวณได้':'รอตรวจสอบ'}</span></div>
 <div class="field" style="margin-bottom:11px"><label>รหัสผ้า / รหัสสินค้า (แอดมินตรวจสอบ)</label><input data-fabric="${esc(it.id)}" value="${esc(it.fabric||'')}" placeholder="พิมพ์รหัสสินค้าจริง" /></div>
@@ -326,7 +366,7 @@ ${isArea?`<div class="field" style="margin-bottom:12px"><label>หน่วย�
 ${it.fabricMethod==='wide'?`<label class="seam-option ${it.joinWide?'seam-on':''}"><input type="checkbox" data-seam="${esc(it.id)}" ${it.joinWide?'checked':''}><span><strong>ยืนยันคำนวณแบบต่อผ้าหน้ากว้าง</strong><small>สำหรับชุดที่กว้างเกินหน้าผ้าใช้ได้; เปลี่ยนไปใช้สูตรจำนวนชิ้นแบบต่อผ้าจาก Excel และต้องแจ้งลูกค้าก่อน</small></span></label>`:''}`}
 ${c.valid?`<div class="price-result"><div><div class="section-sub">${isArea?'ปริมาณพื้นที่คิดราคา':'จำนวนชิ้น · ปริมาณคิดราคา'}</div><div style="font-weight:800;font-size:14px;margin-top:7px">${isArea?`${money(c.quantity,3)} ${it.areaUnit==='yard'?'ตารางหลา':'ตารางเมตร'}`:`${c.panels===null?'ไม่คำนวณชิ้น':c.panels+' ชิ้น'} · ${money(c.quantity,3)} หน่วยคิดราคา`}</div></div><div class="text-right"><div class="section-sub">ราคาขายหลังปัดหลักร้อย</div><div class="price-result-value">฿${money(c.rounded)}</div></div></div><div class="formula-note"><b>${esc(c.methodLabel)}</b><br>${(c.notes||[]).map(esc).join('<br>')}<br>${isArea?`MAX(MAX(กว้าง,1) × สูง × ${it.areaUnit==='yard'?'1.2':'1.0'},1.5) × ราคาต่อหน่วย`:(c.seam||it.fabricMethod!=='wide')?`ชิ้น = ROUNDUP(((MAX(กว้าง,1) × 2.4)+1) ÷ หน้าผ้า,0) = ${c.panels}; จำนวนผ้าคิดราคา = (สูง+1.8) × ชิ้น × 1.2`:'จำนวนผ้าคิดราคา = MAX(กว้าง,1) × 3.6 × 1.2'}<br>จำนวน ${money(c.quantity,3)} · รวมก่อนปัด ฿${money(c.raw,2)}</div>`:`<div class="${c.geometry?'price-invalid':'notice'}" style="margin-bottom:0">${esc(c.reason)} · ไม่สามารถยืนยันรายการนี้ได้</div>`}
 </div><div class="price-item-foot"><span>${esc(it.track)} · ${esc(it.hook)}</span><span>${isArea?'สูตรพื้นที่ · แอดมินกรอกราคา/หน่วย':'แอดมินเลือกแนวผ้าและกรอก 3 ช่องราคา'}</span></div></article>`}
-function pricing(){const t=totals();return `${heading('STEP 02 / PRICING ENGINE','คำนวณราคาอัตโนมัติ','ม่านผ้าเลือกแนวผ้า 3 วิธี · ม่านม้วน/มู่ลี่ไม้เลือกหน่วยพื้นที่ · แอดมินกรอกราคาเองทุกชุด',`<button class="btn btn-light" data-nav="measure">← กลับไปขนาด</button>`)}${stepper('pricing')}
+function pricing(){const t=totals();return `${heading('STEP 02 / PRICING ENGINE','คำนวณราคาอัตโนมัติ','ม่านผ้าเลือกแนวผ้า 3 วิธี · ม่านม้วน/มู่ลี่ไม้เลือกหน่วยพื้นที่ · แอดมินกรอกราคาเองทุกชุด',`<button class="btn btn-light" data-nav="measure">← กลับไปขนาด</button>${cloudEnabled()?'<button class="btn btn-light" data-action="cloud-photos">โหลดรูปจาก Drive</button>':''}`)}${stepper('pricing')}
 <div class="two-col pricing-layout"><div><div class="sample-strip" style="margin-bottom:14px">${ico('info')} ไม่กำหนดราคาสินค้าอัตโนมัติ: ทุกชุดต้องให้แอดมินกรอกราคาจริงก่อนคำนวณ</div>${state.items.length?state.items.map(priceCard).join(''):'<div class="empty">ยังไม่มีรายการสำหรับคำนวณ</div>'}
 <div class="panel"><div class="panel-head"><div><h3>ค่าใช้จ่ายเพิ่มเติม</h3><p class="panel-desc">เช่น ค่าติดตั้ง กล่องบังราง หรือรื้อถอน — แอดมินกรอกยอดเงินเอง</p></div><button class="btn btn-soft" data-action="add-extra">+ เพิ่มรายการ</button></div>${state.extras.map((x,i)=>`<div class="review-row"><div class="review-row-head"><div><h4>${esc(x.label)}</h4><p>เพิ่มโดยแอดมิน ไม่ได้คำนวณจากสูตรสินค้า</p></div><div class="text-right"><b>฿${money(x.amount)}</b><div><button class="btn-reset" data-del-extra="${i}">ลบ</button></div></div></div></div>`).join('')||'<div class="hint">ยังไม่มีค่าบริการเพิ่มเติม</div>'}</div></div>
 <aside class="panel summary-card"><h3>PRICING SUMMARY</h3><p class="section-sub">อัปเดตทันทีเมื่อแก้และออกจากช่องข้อมูล</p><div class="summary-line"><span>จำนวนรายการทั้งหมด</span><b>${state.items.length} ชุด</b></div><div class="summary-line"><span>คำนวณสำเร็จ</span><b>${t.valid.length} ชุด</b></div><div class="summary-line"><span>ราคาก่อน VAT</span><b>฿${money(t.subtotal)}</b></div><div class="summary-line"><span>VAT 7%</span><b>฿${money(t.vat,2)}</b></div><div style="padding-top:22px"><div class="section-sub">ราคาทั้งสิ้น</div><div class="summary-total">฿${money(t.grand,2)}</div></div><div class="approval-stage">${priceIsApproved()?`<div class="notice ok">✓ แอดมินอนุมัติราคาแล้ว · ${esc(state.priceApproval.by)} · ${esc(state.priceApproval.at)}</div>`:`<div class="notice">รอแอดมินตรวจราคาและอนุมัติก่อนให้ฝ่ายขายยืนยัน</div>`}${isAdmin()?`<button class="btn btn-outline-light" data-action="approve-price" ${t.unpriced.length||!state.items.length?'disabled':''}>✓ อนุมัติราคาทั้งงาน (Admin)</button>`:''}</div><button class="btn btn-primary" data-nav="review" ${!state.items.length?'disabled':''}>ส่งฝ่ายขายตรวจสอบ →</button><p class="summary-caption">${t.unpriced.length?`⚠ มี ${t.unpriced.length} ชุดยังคำนวณไม่ได้ จะไม่สามารถยืนยันงานจนกว่าจะครบ`: '✓ รายการที่กรอกครบคำนวณได้แล้ว'}<br>ม่านจีบ / ลอน / ตาไก่: วิธีผ้า 3 แบบ (+ต่อผ้า) · ม่านม้วน / มู่ลี่ไม้: พื้นที่ · ไม่ใช้ราคาตั้งต้น</p></aside></div>`}
@@ -461,24 +501,20 @@ function render(){profileGate();if(!profile){$('#content').innerHTML='';$('#work
 function goto(p){if(!profile)return;if(!sections.some(x=>x[0]===p))return;if(!state.project&&p!=='home'&&p!=='sales'){route='home';render();toast('สร้างโปรเจกต์ใหม่ก่อนเริ่มกรอกขนาด');$('#projectSetup')?.scrollIntoView({behavior:'smooth',block:'start'});return}route=p;render();window.scrollTo({top:0,behavior:'smooth'})}
 function updateModeUi(){const input=$('input[name="widths"]');if(!input)return;$$('#modeSwitch button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));$('#widthLabel').textContent=mode==='multi'?'ความกว้างหลายชุด (เมตร)':'ความกว้าง (เมตร)';$('#multiHelp').textContent=mode==='multi'?'ตัวอย่าง 1.67, 1.66, 1.66, 1.66, 0.72 → จะสร้าง 5 ชุดแยกกัน แต่สูงเท่ากัน':'1 ชุด = 1 ความกว้าง × 1 ความสูง';input.placeholder=mode==='multi'?'1.67, 1.66, 1.66, 1.66, 0.72':'1.24'}
 async function submitMeasurementToAdmin(){
-  if(!state.project||!state.items.length){toast('กรุณาบันทึกขนาดม่านก่อนส่งต่อแอดมิน');return;}
-  if(!cloudEnabled()){goto('pricing');return;}
-  if(!cloudReady){toast('ยังเชื่อม D1 ไม่สำเร็จ กรุณาตรวจสอบ Cloud ก่อนส่ง');return;}
-  if(cloudSaving){toast('ระบบกำลังบันทึก D1 กรุณารอการบันทึกให้เสร็จ แล้วกดส่งต่ออีกครั้ง');return;}
-  // This is now an explicit server-side handoff, not a page navigation.
-  const previousStatus=state.status;
-  state.status='submitted';
-  log('ฝ่ายขายส่งขนาด '+state.items.length+' ชุดให้แอดมินทำราคา');
-  save();
-  clearTimeout(cloudTimer);
-  await cloudPersist();
-  if(cloudDirty||cloudSaving||cloudNeedsResave){
-    toast('ส่งต่อยังไม่สำเร็จ: D1 ยังไม่ยืนยันการบันทึก โปรดแก้ปัญหาและลองอีกครั้ง');
-    return;
-  }
-  goto('pricing');
-  toast('ส่งข้อมูล '+state.items.length+' ชุดให้แอดมินเรียบร้อย · D1 บันทึกสำเร็จ');
-}
+   if(!state.project||!state.items.length){toast('กรุณาบันทึกขนาดม่านก่อนส่งต่อแอดมิน');return;}
+   if(!cloudEnabled()){goto('pricing');return;}
+   if(!cloudReady){toast('ยังเชื่อม D1 ไม่สำเร็จ กรุณาตรวจสอบ Cloud ก่อนส่ง');return;}
+   if(cloudSaving||cloudPhotoBusy){toast('กำลังบันทึกข้อมูลหรืออัปโหลดรูป กรุณารอแล้วกดอีกครั้ง');return;}
+   if(!await cloudFlushChanges()){toast('D1 ยังไม่ยืนยันข้อมูลม่าน กรุณาตรวจสอบก่อนส่งต่อ');return;}
+   // A handoff must not succeed while the sales device has photos absent from Drive.
+   if(!await cloudHydratePhotos({uploadMissing:true})){toast('ส่งต่อยังไม่สำเร็จ: รูปยังซิงก์เข้า Drive ไม่ครบ');return;}
+   state.status='submitted';
+   log('ฝ่ายขายส่งขนาด '+state.items.length+' ชุดให้แอดมินทำราคา');
+   save();
+   if(!await cloudFlushChanges()){toast('ส่งต่อยังไม่สำเร็จ: D1 ยังไม่ยืนยันการบันทึก');return;}
+   goto('pricing');
+   toast('ส่ง '+state.items.length+' ชุดและรูปแนบให้แอดมินแล้ว · D1/Drive ยืนยัน');
+ }
 function resetForm(){const f=$('#surveyForm');if(f)f.reset();toast('ล้างช่องกรอกแล้ว')}
 function readOffset(v){return v===null||String(v).trim()===''?null:Math.max(0,Number(v))}
 async function addFromSurvey(form){const fd=new FormData(form);const val=String(fd.get('widths')||'').trim();const ws=(mode==='multi'?val.split(/[,，;\s]+/):[val]).filter(Boolean).map(v=>Number(v));const h=Number(fd.get('height'));if(!ws.length||ws.some(w=>!(w>0))||!(h>0)){toast('กรุณากรอกความกว้างและความสูงให้ถูกต้อง');return}
@@ -487,7 +523,7 @@ const type=String(fd.get('type'));const floor=String(fd.get('floor'));const room
 const existingPoints=state.items.map(it=>Number((String(it.spot||'').match(/^จุดที่\s*(\d+)/)||[])[1])||0);const numberStart=Math.max(0,...existingPoints)+1;const newlyAdded=[];ws.forEach((w,i)=>{const item={id:uid(),floor,room,spot:`จุดที่ ${String(numberStart+i).padStart(2,'0')}`,type,width:w,height:h,open:String(fd.get('open')),track:String(fd.get('track')),hook:areaCurtains.has(type)?'—':'ใต้ราง',fabric:String(fd.get('fabric')||'').trim(),fabricMethod:null,fabricWidth:null,trackRate:null,fabricRate:null,areaUnit:null,joinWide:false,notes:String(fd.get('notes')||''),offsets:{top:readOffset(fd.get('offsetTop')),bottom:readOffset(fd.get('offsetBottom')),left:readOffset(fd.get('offsetLeft')),right:readOffset(fd.get('offsetRight'))},revisions:[],photos:[]};state.items.push(item);newlyAdded.push(item)});
 const photos=Array.from(form.querySelector('#surveyPhotoInput')?.files||[]).filter(f=>f.type.startsWith('image/')).slice(0,5);
 for(const file of photos){try{newlyAdded[0].photos.push(await resizeDataURL(file))}catch(e){}}
-markChanged(`ฝ่ายขายบันทึกขนาดใหม่ ${ws.length} ชุด`);save();render();toast(`บันทึก ${ws.length} ชุด และรูปภาพ ${newlyAdded[0].photos.length} รูปแล้ว`);$('#surveyForm')?.scrollIntoView({behavior:'smooth',block:'start'});}
+markChanged(`ฝ่ายขายบันทึกขนาดใหม่ ${ws.length} ชุด`);save();render();toast(`เพิ่ม ${ws.length} ชุดในเครื่อง · กำลังบันทึก D1/Drive`);$('#surveyForm')?.scrollIntoView({behavior:'smooth',block:'start'});if(cloudEnabled()&&await cloudFlushChanges()&&newlyAdded[0].photos.length)await cloudHydratePhotos({uploadMissing:true,notify:true});}
 function log(text){state.events.push({at:new Date().toLocaleString('th-TH',{dateStyle:'short',timeStyle:'short'}),text})}
 function modal(html){$('#modalRoot').innerHTML=`<div class="modal" role="dialog" aria-modal="true">${html}</div>`}function closeModal(){$('#modalRoot').innerHTML=''}
 function editItem(id){const it=state.items.find(x=>x.id===id);if(!it)return;modal(`<div class="modal-title"><h3>แก้ไขชุดม่าน · ${esc(it.id)}</h3><button class="icon-only" data-action="close">×</button></div><form id="editForm"><input type="hidden" name="id" value="${esc(it.id)}"/><div class="field-grid"><div class="field"><label>ประเภทม่าน</label><select name="type">${Object.entries(curtainNames).map(([key,name])=>`<option value="${key}" ${it.type===key?'selected':''}>${esc(name)}</option>`).join('')}</select></div><div class="field"><label>รหัสผ้า / สินค้า</label><input name="fabric" value="${esc(it.fabric||'')}"/></div></div><div class="field-grid"><div class="field"><label>ชั้น</label><input name="floor" required value="${esc(it.floor)}"/></div><div class="field"><label>ห้อง</label><input name="room" required value="${esc(it.room)}"/></div><div class="field"><label>จุดติดตั้ง</label><input name="spot" required value="${esc(it.spot)}"/></div><div class="field"><label>เปิดม่าน</label><select name="open">${['เก็บซ้าย','เก็บขวา','แยกกลาง','อิสระ','อื่น ๆ'].map(x=>`<option ${it.open===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>กว้าง (เมตร)</label><input type="number" step="0.001" min="0.01" name="width" required value="${it.width}"/></div><div class="field"><label>สูง (เมตร)</label><input type="number" step="0.001" min="0.01" name="height" required value="${it.height}"/></div></div><div class="form-section"><h4>ระยะติดตั้งเฉพาะชุด (ซม.)</h4></div><div class="field-grid cols4 offset-fields">${[['บน','top'],['ล่าง','bottom'],['ซ้าย','left'],['ขวา','right']].map(([label,key])=>`<div class="field"><label>${label} (ซม.)</label><input type="number" min="0" step="0.1" name="offset_${key}" value="${offsetsOf(it)[key]??''}" /></div>`).join('')}</div><div class="field" style="margin-top:12px"><label>หมายเหตุ</label><textarea name="notes">${esc(it.notes)}</textarea></div><div class="form-actions"><button class="btn btn-primary" type="submit">บันทึกการแก้ไข</button><button type="button" class="btn btn-light" data-action="close">ยกเลิก</button></div></form>`)}
@@ -500,7 +536,7 @@ function downloadOrder(){if(!state.project){toast('กรุณาสร้า�
    หมายเหตุ: ${it.notes||'-'} · รูปแนบ ${it.photos?.length||0} รูป`),'','หมายเหตุ: เอกสารนี้มีเฉพาะรายการขนาดติดตั้ง ยังไม่รวมสูตรคำนวณจัดซื้อ'];downloadFile(`PROFACE_WORK_ORDER_${state.project.id}.txt`,lines.join('\n'))}
 function exportState(){if(!state.project){toast('ยังไม่มีโปรเจกต์ให้ Export');return}downloadFile(`PROFACE_V10_BACKUP_${state.project.id}.json`,JSON.stringify({...state,calculationSummary:totals().res.map(v=>({id:v.item.id,raw:v.raw,rounded:v.rounded,valid:v.valid,reason:v.reason}))},null,2),'application/json;charset=utf-8');toast('ดาวน์โหลดข้อมูล JSON ของโปรเจกต์นี้แล้ว')}
 function resizeDataURL(file,max=720){return new Promise((resolve,reject)=>{const img=new Image();const u=URL.createObjectURL(file);img.onload=()=>{const s=Math.min(1,max/Math.max(img.width,img.height));const canvas=document.createElement('canvas');canvas.width=Math.round(img.width*s);canvas.height=Math.round(img.height*s);const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,canvas.width,canvas.height);URL.revokeObjectURL(u);resolve(canvas.toDataURL('image/jpeg',.55))};img.onerror=()=>{URL.revokeObjectURL(u);reject(Error('ไม่สามารถอ่านภาพได้'))};img.src=u})}
-document.addEventListener('click',ev=>{const button=ev.target.closest('button');if(!button)return;
+document.addEventListener('click',async ev=>{const button=ev.target.closest('button');if(!button)return;
 if(button.dataset.action==='demo-login'&&authConfig.mode==='demo'){chooseProfile('creator');return}
 if(button.dataset.action==='google-login'){signInGoogle();return}
 if(button.dataset.action==='google-logout'&&authConfig.mode==='firebase'){if(!cloudCanLeave())return;profile=null;googleAuthUser=null;sessionStorage.removeItem(profileKey);route='home';render();firebaseAuth?.signOut().catch(err=>toast('ออกจากระบบไม่สำเร็จ: '+err.message));return}
@@ -521,6 +557,7 @@ const act=button.dataset.action;
 if(act==='switch-profile'){if(!cloudCanLeave())return;leaveProfile();return}
 if(act==='submit-measurements'){submitMeasurementToAdmin();return}
 if(act==='cloud-refresh'){cloudBootstrap();return}
+ if(act==='cloud-photos'){if(!await cloudFlushChanges()){toast('D1 ยังบันทึกไม่สำเร็จ ต้องแก้ก่อนซิงก์รูป');return;}await cloudHydratePhotos({uploadMissing:true,notify:true});return}
 if(act==='cloud-retry'){if(state.project)cloudRequest('/api/projects/'+encodeURIComponent(state.project.id)+'/sync',{method:'POST'}).then(r=>{state.project.cloudState=r.project.syncState;state.project.cloudDriveId=r.project.driveFolderId;state.project.cloudSheetId=r.project.sheetsFileId;render();toast(r.sync.ok?'Google Drive/Sheets ซิงก์สำเร็จ':'ยังซิงก์ไม่สำเร็จ: '+r.sync.error)}).catch(e=>toast(e.message));return}
 if(act==='cloud-connect'){if(!confirm('คำเตือน: Backend รุ่นทดสอบยังขอสิทธิ์จัดการ Google Drive ทั้งบัญชีบริษัท\n\nควรตรวจขอบเขตสิทธิ์และหน้า Privacy Policy ก่อนอนุญาต\n\nต้องการเปิดหน้าขออนุญาต Google จริงหรือไม่?'))return;cloudRequest('/api/google/connect',{method:'POST'}).then(r=>location.assign(r.url)).catch(e=>toast(e.message));return}
 if(act==='close'){closeModal();return}
@@ -567,7 +604,7 @@ if(input.dataset.seam){if(!isAdmin()){toast('เฉพาะ Admin ที่แ�
 if(input.dataset.price){if(!isAdmin()){toast('เฉพาะ Admin ที่แก้ไขราคาได้');return;}const it=state.items.find(x=>x.id===input.dataset.id);if(!it)return;const k=input.dataset.price;it[k]=(k==='fabricMethod'||k==='areaUnit')?(input.value||null):(input.value.trim()===''?null:n(input.value));if(k==='fabricMethod'&&input.value!=='wide')it.joinWide=false;markChanged('ปรับราคา/สูตร · รออนุมัติใหม่');save();render();toast('คำนวณราคาใหม่แล้ว · รออนุมัติ');return}
 
 });
-$('#photoInput').addEventListener('change',async ev=>{const it=state.items.find(x=>x.id===uploadingItemId);const files=Array.from(ev.target.files||[]).filter(f=>f.type.startsWith('image/'));if(!it||!files.length)return;let count=0;for(const f of files.slice(0,5)){try{const data=await resizeDataURL(f);if((it.photos||[]).length<5){(it.photos||(it.photos=[])).push(data);count++;if(cloudEnabled())cloudUploadPhoto(it.id,data)}}catch(e){}}log('เพิ่มรูปภาพหน้างาน');save();if(route==='measure')render();toast(`เพิ่มรูป ${count} รูปให้ ${it.spot} แล้ว`);ev.target.value='';uploadingItemId=null});
+$('#photoInput').addEventListener('change',async ev=>{const it=state.items.find(x=>x.id===uploadingItemId);const files=Array.from(ev.target.files||[]).filter(f=>f.type.startsWith('image/'));if(!it||!files.length)return;let count=0;for(const f of files.slice(0,5)){try{const data=await resizeDataURL(f);if((it.photos||[]).length<5){(it.photos||(it.photos=[])).push(data);count++}}catch(e){toast('รูปบางรูปอ่านไม่ได้: '+e.message)}}log('เพิ่มรูปภาพหน้างาน');save();if(route==='measure')render();toast(`แนบ ${count} รูปในเครื่อง · กำลังซิงก์ Drive`);ev.target.value='';uploadingItemId=null;if(cloudEnabled()&&await cloudFlushChanges())await cloudHydratePhotos({uploadMissing:true,notify:true});});
 $('#exportBtn').addEventListener('click',exportState);
 $('#modalRoot').addEventListener('click',ev=>{if(ev.target.id==='modalRoot')closeModal()});
 window.addEventListener('keydown',ev=>{if(ev.key==='Escape')closeModal()});
