@@ -1,9 +1,9 @@
-// Public Firebase Web App metadata for PROFACE V9 cloud-connected pilot.
+// Public Firebase Web App metadata for PROFACE V10 cloud-connected pilot.
 // NEVER add service-account keys, OAuth client secrets or refresh tokens here.
 window.PROFACE_CONFIG = {
  mode: 'firebase',
  cloudRequired: true, // Block local/random project creation until Cloudflare is connected
- // The deployed V8 Worker API remains the backend for V9. Do not append /api here.
+ // The deployed V8 Worker API remains the backend for V10. Do not append /api here.
  apiBase: 'https://proface-workflow-v8-api.proface-corporation.workers.dev',
  firebase: {
   apiKey: 'AIzaSyAKYENGTFcXMAAnpVQLm-97Z_4kTTm__6I',
